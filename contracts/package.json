@@ -1,0 +1,31 @@
+{
+  "name": "contracts",
+  "version": "1.0.0",
+  "description": "RentLock Smart Contracts",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "deploy:local": "hardhat run scripts/deploy.js --network hardhat"
+  },
+  "keywords": [
+    "escrow",
+    "rental",
+    "blockchain",
+    "solidity"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@openzeppelin/contracts": "^5.6.1",
+    "hardhat": "^2.20.0",
+    "dotenv": "^16.3.1",
+    "chai": "^4.3.7"
+  },
+  "dependencies": {
+    "ethers": "^6.9.0"
+  }
+}

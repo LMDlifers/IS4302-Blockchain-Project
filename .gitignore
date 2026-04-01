@@ -1,0 +1,30 @@
+# Claude
+.claude/
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# Hardhat / Solidity build artifacts
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+contracts/coverage/
+contracts/coverage.json
+
+# Frontend build output
+frontend/dist/
+frontend/.vite/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
