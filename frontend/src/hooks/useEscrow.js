@@ -29,20 +29,21 @@ export function useLease(leaseId) {
  * Step 1 of the 2-step deposit flow
  */
 export function useApproveUSDC() {
-  const { writeContract, data: hash } = useWriteContract();
-  const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
+  const { writeContractAsync } = useWriteContract();
 
-  const approve = (amount) => {
+  const approve = (amount, options = {}) => {
     const parsedAmount = parseUnits(String(amount), 6);
-    return writeContract({
+    return writeContractAsync({
       address: USDC_ADDRESS,
       abi: USDC_ABI,
       functionName: "approve",
       args: [ESCROW_ADDRESS, parsedAmount],
+      gas: 3000000n,
+      ...options,
     });
   };
 
-  return { approve, isLoading, isSuccess, hash };
+  return { approve };
 }
 
 /**
@@ -51,19 +52,20 @@ export function useApproveUSDC() {
  * Requires prior approval via useApproveUSDC
  */
 export function useDepositFunds() {
-  const { writeContract, data: hash } = useWriteContract();
-  const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
+  const { writeContractAsync } = useWriteContract();
 
-  const deposit = (leaseId) => {
-    return writeContract({
+  const deposit = (leaseId, options = {}) => {
+    return writeContractAsync({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "depositFunds",
       args: [leaseId],
+      gas: 3000000n,
+      ...options,
     });
   };
 
-  return { deposit, isLoading, isSuccess, hash };
+  return { deposit };
 }
 
 /**
@@ -71,20 +73,21 @@ export function useDepositFunds() {
  * Landlord stakes 20% of deposit and uploads IPFS CID
  */
 export function useInitializeLease() {
-  const { writeContract, data: hash } = useWriteContract();
-  const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
+  const { writeContractAsync } = useWriteContract();
 
-  const initializeLease = (tenant, depositAmount, deadline, gracePeriod, ipfsCID) => {
+  const initializeLease = (tenant, depositAmount, deadline, gracePeriod, ipfsCID, options = {}) => {
     const parsedDeposit = parseUnits(String(depositAmount), 6);
-    return writeContract({
+    return writeContractAsync({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "initializeLease",
       args: [tenant, parsedDeposit, deadline, gracePeriod, ipfsCID],
+      gas: 3000000n,
+      ...options,
     });
   };
 
-  return { initializeLease, isLoading, isSuccess, hash };
+  return { initializeLease };
 }
 
 /**
@@ -95,13 +98,15 @@ export function useProposeRelease() {
   const { writeContract, data: hash } = useWriteContract();
   const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
 
-  const propose = (leaseId, amountToLandlord) => {
+  const propose = (leaseId, amountToLandlord, options = {}) => {
     const parsedAmount = parseUnits(String(amountToLandlord), 6);
     return writeContract({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "proposeRelease",
       args: [leaseId, parsedAmount],
+      gas: 3000000n,
+      ...options,
     });
   };
 
@@ -116,12 +121,14 @@ export function useAcceptRelease() {
   const { writeContract, data: hash } = useWriteContract();
   const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
 
-  const accept = (leaseId) => {
+  const accept = (leaseId, options = {}) => {
     return writeContract({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "acceptRelease",
       args: [leaseId],
+      gas: 3000000n,
+      ...options,
     });
   };
 
@@ -136,12 +143,14 @@ export function useRaiseDispute() {
   const { writeContract, data: hash } = useWriteContract();
   const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
 
-  const raise = (leaseId) => {
+  const raise = (leaseId, options = {}) => {
     return writeContract({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "raiseDispute",
       args: [leaseId],
+      gas: 3000000n,
+      ...options,
     });
   };
 

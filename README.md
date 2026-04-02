@@ -1,515 +1,234 @@
-# 🔒 RentLock: Blockchain Rental Escrow System
+# 🔒 RentLock — AI-Powered Blockchain Rental Escrow
 
-A trustless, on-chain rental deposit escrow system powered by Solidity smart contracts, event-driven backend listeners, and AI-powered dispute resolution via LLM judges.
+A trustless, on-chain rental deposit system that uses **Google Gemini AI** to automatically resolve disputes by analyzing evidence stored on **IPFS**.
 
-**Status:** ✅ Fully Implemented (Ready for Testing & Deployment)
-
----
-
-## 📋 Overview
-
-RentLock solves rental deposit fraud by holding deposits in a smart contract instead of a landlord's bank account. The system supports three resolution paths:
-
-1. **Scenario A (Mutual Release):** Landlord proposes a split → Tenant accepts → Funds distribute
-2. **Scenario B (Timeout/No-Show):** Deadline + grace period expires → Tenant refunded, landlord stake slashed
-3. **Scenario C (Dispute with LLM Judge):** Tenant disputes → Backend fetches IPFS evidence → Claude LLM analyzes → Verdict submitted on-chain
-
-### Key Features
-
-✅ **Trustless Escrow** — Landlords stake 20% of deposit value (skin in the game)  
-✅ **Event-Driven Backend** — Listens for `DisputeRaised` events → auto-resolves with LLM  
-✅ **IPFS Evidence Chain** — All lease docs, photos stored immutably with content-addressed CIDs  
-✅ **LLM Judge** — Claude API analyzes dispute evidence with confidence scoring  
-✅ **X402 Micropayments** — HTTP 402 protocol gates LLM inference  
-✅ **Wagmi/Viem Frontend** — Real wallet connect, transaction tracking, Etherscan links  
-✅ **Comprehensive Testing** — 45+ tests covering all 3 scenarios + security checks
+> **Course Project:** IS4302 Blockchain Technology & Applications  
+> **Stack:** Solidity · Hardhat · React (Vite) · Node.js · Wagmi · Viem · Google Gemini · IPFS/Pinata  
+> **Local Chain:** Hardhat (Chain ID `1337`)
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ System Architecture
 
 ```
-┌──────────────────────────────────────┐
-│  Smart Contracts (Solidity)          │
-│  EscrowManager.sol (7 functions)     │
-│  - initializeLease()                 │
-│  - depositFunds()                    │
-│  - proposeRelease() + acceptRelease()│
-│  - timeoutRefund()                   │
-│  - raiseDispute() + resolveDispute() │
-└────────────────┬─────────────────────┘
-                 │ Events
-                 ▼
-┌──────────────────────────────────────┐
-│  Backend (Node.js/Express)           │
-│  - disputeListener.js ⭐ (The Heart) │
-│    Listens → Fetch IPFS → Call LLM   │
-│    → Submit Verdict                  │
-│  - leaseListener.js (Logging)        │
-│  - IPFS Service (Pinata)             │
-│  - LLM Service (Claude API)          │
-│  - X402 Service (Micropayments)      │
-└────────────────┬─────────────────────┘
-                 │ HTTP REST
-                 ▼
-┌──────────────────────────────────────┐
-│  Frontend (React + Vite)             │
-│  - Wagmi Hooks (Contract Calls)      │
-│  - 3-Step Create Flow                │
-│  - 2-Step Deposit Flow               │
-│  - Real-time TX Status               │
-│  - IPFS File Upload                  │
-└──────────────────────────────────────┘
+┌─────────────────┐    ┌─────────────────┐    ┌──────────────────┐
+│   Frontend      │    │   Backend        │    │  Smart Contracts  │
+│   (React/Vite)  │◄──►│   (Node.js)     │◄──►│  (Solidity/HH)   │
+│   :5173         │    │   :3001          │    │  :8545            │
+└─────────────────┘    └────────┬────────┘    └──────────────────┘
+                                │
+                    ┌───────────┴──────────┐
+                    │    External Services  │
+                    │  • Google Gemini AI   │
+                    │  • IPFS / Pinata      │
+                    └──────────────────────┘
 ```
 
 ---
 
-## 🛠️ Tech Stack
+## 📋 Prerequisites
 
-| Layer | Technology |
-|-------|-----------|
-| **Smart Contracts** | Solidity 0.8.20, Hardhat, OpenZeppelin |
-| **Backend** | Node.js, Express, Ethers.js v6, Pinata, Claude API |
-| **Frontend** | React 19, Vite, Wagmi 2, Viem, React Query |
-| **Testing** | Hardhat (45 tests), Mocha/Chai |
-| **Deployment** | Sepolia Testnet, Etherscan verification |
-| **External** | IPFS (Pinata), Claude LLM API, Infura RPC |
+Before you start, make sure you have:
 
----
-
-## 📁 Project Structure
-
-```
-IS4302-Blockchain-Project/
-├── contracts/
-│   ├── EscrowManager.sol          ✅ Core escrow logic (280 lines)
-│   ├── MockUSDC.sol               ✅ ERC-20 for testing
-│   ├── MockVRF.sol                ✅ VRF placeholder
-│   ├── hardhat.config.js          ✅ Hardhat configuration
-│   ├── scripts/
-│   │   └── deploy.js              ✅ Deployment script
-│   ├── test/
-│   │   └── EscrowManager.test.js   ✅ 45 comprehensive tests
-│   └── package.json
-│
-├── backend/
-│   ├── src/
-│   │   ├── server.js              ✅ Express + IPFS endpoints
-│   │   ├── provider.js            ✅ Ethers.js setup
-│   │   ├── listeners/
-│   │   │   ├── disputeListener.js ⭐ Disputes → LLM → Resolve
-│   │   │   └── leaseListener.js   ✅ Event logging
-│   │   └── services/
-│   │       ├── ipfsService.js     ✅ Pinata upload/fetch
-│   │       ├── llmService.js      ✅ Claude API integration
-│   │       └── x402Service.js     ✅ HTTP 402 gating
-│   ├── config/
-│   │   └── contracts.js           ✅ ABI + address config
-│   ├── package.json               ✅ Dependencies
-│   └── .env                       ✅ Environment template
-│
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx                ✅ Full UI + contract wiring
-│   │   ├── main.jsx               ✅ Wagmi + Query wrappers
-│   │   ├── wagmi.config.js        ✅ Sepolia config
-│   │   ├── hooks/
-│   │   │   └── useEscrow.js       ✅ 10 contract hooks
-│   │   └── config/
-│   │       └── contracts.js       ✅ ABI + addresses
-│   ├── vite.config.js
-│   ├── package.json               ✅ Added wagmi, viem, react-query
-│   └── .env                       ✅ Environment template
-│
-├── CLAUDE.md                       ✅ Project guidelines
-└── README.md                       ✅ This file
-```
+- **Node.js** v18+ (`node --version`)
+- **npm** v9+ (`npm --version`)
+- **MetaMask** browser extension installed
+- **Git** (to clone this repo)
+- API Keys (see [Environment Setup](#-environment-setup)):
+  - Google Gemini API Key
+  - Pinata IPFS JWT (optional — a demo fallback is built in)
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Full Setup Guide (First Time)
 
-### Prerequisites
-
-- **Node.js 16+** and **npm**
-- **MetaMask** or compatible Web3 wallet
-- **Sepolia testnet ETH** (from [faucet.sepolia.dev](https://faucet.sepolia.dev))
-- **Infura API key** (free at [infura.io](https://infura.io))
-- **Pinata API JWT** (free at [pinata.cloud](https://pinata.cloud))
-- **Anthropic API key** (for Claude LLM, get at [console.anthropic.com](https://console.anthropic.com))
-
-### 1️⃣ Install Dependencies
+### Step 1: Clone & Install Dependencies
 
 ```bash
-# Backend
-cd backend && npm install
+git clone <repo-url>
+cd IS4302-Blockchain-Project
 
-# Frontend
+# Install all dependencies
+cd contracts && npm install
+cd ../backend  && npm install
 cd ../frontend && npm install
-
-# Contracts (if needed)
-cd ../contracts && npm install
 ```
 
-### 2️⃣ Test Smart Contracts Locally
+### Step 2: Environment Setup
 
-```bash
-cd contracts
-npx hardhat compile
-npx hardhat test
-
-# Expected: All tests pass ✓
-# Scenario A: Mutual Release
-# Scenario B: Timeout Refund
-# Scenario C: Dispute Resolution
-# Security: Reentrancy, access control, edge cases
-```
-
-### 3️⃣ Deploy to Sepolia
-
-```bash
-cd contracts
-
-# Set environment variables
-export RPC_URL="https://sepolia.infura.io/v3/YOUR_INFURA_KEY"
-export PRIVATE_KEY="0x..." # Your deployer wallet private key
-
-# Deploy
-npx hardhat run scripts/deploy.js --network sepolia
-
-# Output will show:
-# USDC Address:      0x...
-# EscrowManager:     0x...
-# Fee Address:       0x...
-```
-
-### 4️⃣ Configure Environment Files
-
-**`backend/.env`:**
-```bash
+#### Backend (`backend/.env`)
+Create `backend/.env` with the following:
+```env
 PORT=3001
-RPC_URL=https://sepolia.infura.io/v3/YOUR_INFURA_KEY
-PRIVATE_KEY=0x...
-ESCROW_MANAGER_ADDRESS=0x...      # from deploy output
-USDC_ADDRESS=0x...                # from deploy output
-BACKEND_WALLET_ADDRESS=0x...      # your deployer wallet
-PINATA_JWT=eyJ...                 # from Pinata
-ANTHROPIC_API_KEY=sk-ant-...      # from Anthropic
-LLM_CONFIDENCE_THRESHOLD=0.80
+CHAIN_ID=1337
+RPC_URL=http://127.0.0.1:8545
+BACKEND_WALLET_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
+# Paste these after deploying contracts (Step 4):
+ESCROW_MANAGER_ADDRESS=
+USDC_ADDRESS=
+
+# External APIs:
+GEMINI_API_KEY=<your_google_ai_studio_key>
+PINATA_JWT=<your_pinata_jwt_token>
 ```
 
-**`frontend/.env`:**
-```bash
-VITE_RPC_URL=https://sepolia.infura.io/v3/YOUR_INFURA_KEY
-VITE_ESCROW_ADDRESS=0x...         # from deploy output
-VITE_USDC_ADDRESS=0x...           # from deploy output
-VITE_BACKEND_URL=http://localhost:3001
+#### Frontend (`frontend/.env`)
+Create `frontend/.env` with the following:
+```env
+VITE_RPC_URL=http://127.0.0.1:8545
+VITE_CHAIN_ID=1337
+
+# Paste these after deploying contracts (Step 4):
+VITE_ESCROW_ADDRESS=
+VITE_USDC_ADDRESS=
 ```
 
-### 5️⃣ Start Backend Listener
+### Step 3: Configure MetaMask
 
-```bash
-cd backend
-npm run dev
+1. **Add Hardhat Network** to MetaMask:
+   - Network Name: `Hardhat`
+   - RPC URL: `http://127.0.0.1:8545`
+   - Chain ID: `1337`
+   - Currency Symbol: `ETH`
 
-# Expected output:
-# ✓ Server listening on port 3001
-# ✓ Event listeners initialized
-```
+2. **Create Two Accounts** in MetaMask:
+   - Rename Account 1 → **"Landlord"**
+   - Create Account 2 → Rename to **"Tenant"**
+   - Note down the **Ethereum (`0x...`) address** of the Tenant account
 
-The backend will now:
-- Listen for blockchain events (DisputeRaised, LeaseReleased, etc.)
-- Fetch evidence from IPFS
-- Analyze disputes with Claude LLM
-- Submit verdicts on-chain automatically
+### Step 4: Start the Local Blockchain
 
-### 6️⃣ Start Frontend Dev Server
-
-```bash
-cd frontend
-npm run dev
-
-# Opens http://localhost:5173
-```
-
----
-
-## 📖 How to Use
-
-### Create an Escrow (Landlord)
-
-1. **Connect MetaMask** to Sepolia
-2. **Navigate to "Create New"** tab
-3. **Step 1:** Enter tenant address, deposit amount (e.g., 1000 USDC), deadline, grace period
-4. **Step 2:** Upload lease PDF + move-in photos to IPFS
-5. **Step 3:** Review details and click "Deploy Escrow"
-   - You'll be prompted to **approve your 20% stake** (200 USDC for 1000 USDC deposit)
-   - Then confirm the lease creation transaction
-6. **Lease is now CREATED** — waiting for tenant to deposit
-
-### Deposit Funds (Tenant)
-
-1. **Switch to tenant wallet** in MetaMask
-2. **Click the escrow** from "My Escrows" tab
-3. **Click "Approve & Deposit USDC"**
-   - Step 1: Approve 1000 USDC spend
-   - Step 2: Deposit funds to escrow
-4. **Lease moves to LOCKED** ✓
-
-### Scenario A: Mutual Release
-
-1. **Landlord proposes split** (e.g., keep 200 USDC for minor repairs)
-2. **Tenant receives proposal notification**
-3. **Tenant clicks "Accept Release"**
-4. **Funds distribute:**
-   - Landlord gets: 200 (deposit split) + 200 (stake returned) = 400 USDC
-   - Tenant gets: 800 USDC (remaining deposit)
-5. **Lease moves to RELEASED** ✓
-
-### Scenario C: Dispute with LLM Judge
-
-1. **Tenant clicks "Raise Dispute"** (disputes landlord's claim)
-2. **Backend listener catches DisputeRaised event**
-3. **Backend automatically:**
-   - Fetches lease & evidence from IPFS
-   - Calls Claude LLM to analyze (move-in vs move-out photos, lease terms, claims)
-   - LLM returns verdict: `{ amountToLandlord: 300, confidence: 0.92, reasoning: "..." }`
-4. **Verdict submitted to contract** if confidence ≥ 0.80
-5. **Funds distribute based on LLM verdict**
-6. **Lease moves to RELEASED** ✓
-
-### Scenario B: Timeout Refund (Tenant No-Show)
-
-1. **Deadline + grace period expires** (no mutual release, no dispute)
-2. **Anyone calls `timeoutRefund()`** (or backend keeper bot)
-3. **Funds distribute:**
-   - Tenant gets: 1000 USDC (full deposit)
-   - Landlord stake: 200 USDC **slashed to feeAddress** (penalty)
-4. **Lease moves to REFUNDED** ✓
-
----
-
-## 🧪 Testing
-
-### Run All Tests
+Open a terminal in the `contracts/` folder:
 ```bash
 cd contracts
-npx hardhat test
+npx hardhat node
+```
+> ✅ Leave this terminal running. You should see "Started HTTP and WebSocket JSON-RPC server at http://127.0.0.1:8545/"
+
+### Step 5: Deploy Contracts
+
+Open a **new terminal** in `contracts/`:
+```bash
+cd contracts
+npx hardhat run scripts/deploy.js --network localhost
 ```
 
-### Test Coverage
-- ✅ **Initialization:** Lease creation, stake transfer
-- ✅ **Scenario A:** Propose → Accept → Transfer
-- ✅ **Scenario B:** Timeout → Refund + Slash
-- ✅ **Scenario C:** Dispute → Verifier → Resolve
-- ✅ **Security:** Reentrancy guards, access control, edge cases
-
-### Manual E2E Test Flow
-
-1. **Deploy to local Hardhat node** or Sepolia
-2. **Mint test USDC** to landlord/tenant (via `MockUSDC.mint()`)
-3. **Create escrow** (landlord)
-4. **Deposit funds** (tenant) — lease → LOCKED
-5. **Test Scenario A:**
-   - Propose release → Accept → Verify balances
-6. **Test Scenario C (in separate lease):**
-   - Raise dispute → Watch backend logs → Verify LLM call → Check verdict on-chain
-
----
-
-## 🔗 Smart Contract Functions
-
-### Landlord Functions
-- `initializeLease(tenant, deposit, deadline, gracePeriod, ipfsCID)` — Create lease + stake
-- `proposeRelease(leaseId, amountToLandlord)` — Propose how much to keep
-- `addVerifier(address)` — Add verifier to pool (owner only)
-
-### Tenant Functions
-- `depositFunds(leaseId)` — Deposit USDC (2-step: approve first)
-- `acceptRelease(leaseId)` — Accept landlord's split proposal
-- `raiseDispute(leaseId)` — Trigger LLM dispute resolution
-
-### Verifier Functions
-- `resolveDispute(leaseId, amountToLandlord)` — Submit LLM verdict
-
-### Public Functions
-- `timeoutRefund(leaseId)` — Refund tenant + slash stake after deadline+grace
-
----
-
-## 📊 Event Flows (State Machine)
-
+Copy the output addresses and paste them into **both** `.env` files:
 ```
-Phase 1: Setup
-  Landlord: initializeLease() + approve stake
-    ↓
-  Lease State: CREATED
-    ↓
-  Tenant: depositFunds() + approve USDC
-    ↓
-  Lease State: LOCKED
+VITE_USDC_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
+VITE_ESCROW_ADDRESS=0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
+ESCROW_MANAGER_ADDRESS=0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
+USDC_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
+```
+> ⚠️ The addresses above are **deterministic** — they will always be the same if you redeploy on a fresh Hardhat node.
 
-Phase 2: Resolution (3 paths)
+### Step 6: Fund Your MetaMask Wallet
 
-Path A (Mutual):
-  Landlord: proposeRelease(amountToLandlord)
-    ↓
-  Tenant: acceptRelease()
-    ↓
-  Lease State: RELEASED ✓
+MetaMask starts with 0 balance on local networks. Run this in a terminal inside `contracts/`:
 
-Path B (Timeout):
-  Deadline + Grace Period expires
-    ↓
-  Anyone: timeoutRefund()
-    ↓
-  Lease State: REFUNDED ✓
-  (Tenant refunded, Landlord stake slashed)
+```powershell
+node -e "const { ethers } = require('ethers'); const abi = ['function mint(address to, uint256 amount) public']; const provider = new ethers.JsonRpcProvider('http://127.0.0.1:8545'); const wallet = new ethers.Wallet('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', provider); const usdc = new ethers.Contract('0x5FbDB2315678afecb367f032d93F642f64180aa3', abi, wallet); async function fill() { const target = 'PASTE_YOUR_LANDLORD_0x_ADDRESS_HERE'; let nonce = await provider.getTransactionCount(wallet.address); await wallet.sendTransaction({ to: target, value: ethers.parseEther('10.0'), nonce: nonce++ }); await usdc.mint(target, ethers.parseUnits('10000', 6), { nonce: nonce++ }); console.log('Done! Wallet funded.'); } fill();"
+```
+> Replace `PASTE_YOUR_LANDLORD_0x_ADDRESS_HERE` with the Landlord's MetaMask address.
 
-Path C (Dispute):
-  Tenant: raiseDispute()
-    ↓
-  Lease State: DISPUTED
-  Verifier assigned (random from pool)
-    ↓
-  Backend Listener:
-    - Fetch IPFS evidence
-    - Call Claude LLM
-    - Submit resolveDispute(amountToLandlord)
-    ↓
-  Lease State: RELEASED ✓
+After running, check MetaMask — your Landlord account should show **~10 ETH**.
+
+### Step 7: Start Backend & Frontend
+
+```bash
+# Terminal 3 — Backend
+cd backend && npm run dev
+
+# Terminal 4 — Frontend
+cd frontend && npm run dev
 ```
 
----
+Open your browser at **`http://localhost:5173`** and connect MetaMask.
 
-## 🔐 Security
-
-### Smart Contract
-- ✅ **ReentrancyGuard** on all transfer functions
-- ✅ **Checks-Effects-Interactions pattern** enforced
-- ✅ **Access control modifiers** (onlyLandlord, onlyTenant, onlyVerifier, onlyOwner)
-- ✅ **State machine validation** (can only transition to valid states)
-- ✅ **No self-destruct or delegatecall**
-
-### Backend
-- ✅ **Environment variables** (never commit secrets)
-- ✅ **Error handling** on all async operations
-- ✅ **Input validation** on API endpoints
-- ✅ **CORS enabled** (restrict in production)
-
-### Frontend
-- ✅ **Wagmi hooks** handle transaction signing securely
-- ✅ **No private keys stored** (MetaMask handles it)
-- ✅ **Etherscan verification links** for transparency
-
-### Known Limitations
-⚠️ **Randomness:** `_assignVerifier()` uses `keccak256` (weak). Replace with **Chainlink VRF** for production.  
-⚠️ **LLM Decisions:** Use confidence threshold + human escalation for edge cases.
+> ⚠️ **If MetaMask shows old failed transactions** after restarting Hardhat:  
+> MetaMask → Settings → Advanced → **"Clear activity tab data"** → Refresh the page.
 
 ---
 
-## 📝 Environment Variables Checklist
+## 🎬 Demo Flow
 
-**Backend** (`backend/.env`):
-```
-PORT                          # ✅ Default: 3001
-RPC_URL                       # ✅ Sepolia RPC URL
-PRIVATE_KEY                   # ✅ Backend wallet private key (never commit!)
-ESCROW_MANAGER_ADDRESS        # ✅ From deploy.js output
-USDC_ADDRESS                  # ✅ From deploy.js output
-BACKEND_WALLET_ADDRESS        # ✅ Your deployer wallet
-PINATA_JWT                    # ✅ From pinata.cloud
-ANTHROPIC_API_KEY             # ✅ From console.anthropic.com
-LLM_CONFIDENCE_THRESHOLD      # ✅ Default: 0.80
-CHAIN_ID                      # ✅ Default: 11155111 (Sepolia)
-```
+### Scenario A: Mutual Release (Happy Path)
 
-**Frontend** (`frontend/.env`):
-```
-VITE_RPC_URL                  # ✅ Sepolia RPC URL
-VITE_ESCROW_ADDRESS           # ✅ From deploy.js output
-VITE_USDC_ADDRESS             # ✅ From deploy.js output
-VITE_BACKEND_URL              # ✅ Default: http://localhost:3001
-```
+| Step | Role | Action |
+|------|------|--------|
+| 1 | **Landlord** | Click "Create New" → Fill form → Upload lease doc → Deploy Escrow |
+| 2 | MetaMask | Confirm **2 popups**: (1) Approve USDC stake → (2) Create Lease |
+| 3 | **Tenant** | Switch MetaMask to Tenant account → Click "Approve & Deposit" |
+| 4 | **Landlord** | Switch back to Landlord → Click "Propose Release" |
+| 5 | **Tenant** | Click "Accept Release" → Funds distributed! |
 
----
+### Scenario B: AI Dispute Resolution ⭐
 
-## 🐛 Troubleshooting
+Follow steps 1–3 of Scenario A to get to `LOCKED` state, then:
 
-### MetaMask: "User rejected the request"
-→ User cancelled the transaction. Retry and confirm.
-
-### Backend: "No verifiers in pool"
-→ Deploy script didn't add verifier. Run `addVerifier()` via contract interface.
-
-### IPFS upload fails
-→ Check Pinata JWT token in `.env`. Ensure quota not exceeded.
-
-### LLM returns low confidence
-→ Insufficient or ambiguous evidence. System escalates to manual review.
-
-### "Wrong state" error
-→ Lease is not in the expected state. Check current state in escrow detail page.
+1. **Tenant**: Click **"Raise Dispute"**
+2. Watch the **Backend terminal** — you'll see:
+   ```
+   ✓ DisputeRaised event detected for lease #1
+   ✓ Fetching IPFS evidence...
+   ✓ Sending to Gemini AI for analysis...
+   ✓ Verdict received. Submitting resolveDispute transaction...
+   ```
+3. The lease automatically moves to `RELEASED` with funds distributed per AI verdict.
 
 ---
 
-## 📈 Next Steps (Roadmap)
+## 💡 Creating an Escrow — What to Fill In
 
-### Immediate (Testing Phase)
-- [ ] Deploy to Sepolia
-- [ ] Manual E2E testing on all 3 scenarios
-- [ ] Verify LLM judge outputs
-- [ ] Test IPFS evidence chain
+| Field | What to enter |
+|-------|--------------|
+| **Tenant address** | The Tenant MetaMask Ethereum (`0x...`) address |
+| **Deposit amount** | e.g. `1000` (USDC) |
+| **Deadline** | Any future date |
+| **Grace period** | e.g. `7` (days) |
+| **Evidence upload** | Any PDF or image (or skip — demo fallback is built in) |
 
-### Short-term (Production Readiness)
-- [ ] Replace weak randomness with **Chainlink VRF**
-- [ ] Implement **human escalation** for low-confidence disputes
-- [ ] Add **rate limiting** to backend (prevent LLM spam)
-- [ ] Set **real feeAddress** (DAO treasury, not deployer)
-- [ ] Etherscan contract verification
-
-### Medium-term (Features)
-- [ ] Multi-signature verifier panel (3-of-5)
-- [ ] Reputation scoring for verifiers
-- [ ] Recurring lease support
-- [ ] Partial refund logic
-- [ ] Mobile app (React Native)
-
-### Long-term (Scaling)
-- [ ] Polygon/Optimism deployment
-- [ ] Cross-chain bridge (deposit on L2, settle on L1)
-- [ ] DAO governance for fee allocation
-- [ ] Tokenomics (LOCK token for verifiers)
+> The Landlord automatically stakes **20% of the deposit** (e.g. 200 USDC for a 1000 USDC deposit) as a performance guarantee.
 
 ---
 
-## 📞 Support & Feedback
+## 🛠️ Troubleshooting
 
-For questions or issues:
-1. Check **Troubleshooting** section above
-2. Review **CLAUDE.md** for architecture decisions
-3. Open an issue on GitHub
-4. Contact: [your-email@example.com]
-
----
-
-## 📄 License
-
-MIT License — See LICENSE file for details.
+| Error | Cause | Fix |
+|-------|-------|-----|
+| **Gas limit error** in MetaMask | MetaMask cached a broken gas estimate | Settings → Advanced → **Clear activity tab data** → Refresh |
+| **"Nonce too low"** | Hardhat was restarted without resetting MetaMask | Same fix as above |
+| **`ERC20InsufficientAllowance`** | The approve step didn't complete first | The app now handles this automatically — just try again after resetting |
+| **`EADDRINUSE :3001`** | Ghost node process stuck on port | Run `taskkill /F /IM node.exe` in PowerShell |
+| **Blank review page** | Page loaded before file upload confirmed | Click "Next: Review" — a demo CID is auto-assigned if no file uploaded |
+| **Tenant shows $0.00** | Tenant wallet not funded | Run the Fill Wallet script above for the Tenant address too |
+| **`Failed to fetch` (IPFS)** | Pinata JWT not configured | The app falls back to a demo CID automatically |
 
 ---
 
-## 🙏 Acknowledgments
+## 🔐 Security Notes (Local Demo Only)
 
-- **OpenZeppelin** — ERC-20, ReentrancyGuard, Ownable
-- **Anthropic** — Claude LLM API
-- **Pinata** — IPFS gateway
-- **Wagmi/Viem** — Web3 React hooks
-- **Hardhat** — Solidity development environment
+> [!WARNING]
+> The private keys and API keys shown in this README are for **local development only**.
+> The Hardhat deployer key (`0xac097...`) is publicly known and must **never** be used on mainnet.
+
+---
+
+## 🏛️ Smart Contract Functions
+
+| Function | Role | Triggered By |
+|----------|------|-------------|
+| `initializeLease()` | Creates escrow, pulls 20% stake from Landlord | Landlord |
+| `depositFunds()` | Tenant locks deposit, moves to LOCKED state | Tenant |
+| `proposeRelease()` | Landlord proposes a payout split | Landlord |
+| `acceptRelease()` | Tenant accepts split, funds distributed | Tenant |
+| `raiseDispute()` | Moves to DISPUTED, triggers AI backend | Tenant |
+| `resolveDispute()` | AI verdict submitted on-chain | Backend (Verifier) |
+| `timeoutRefund()` | Refunds tenant if deadline + grace period passes | Anyone |
 
 ---
 
 **Built with ❤️ for trustless rentals**
 
-Last Updated: April 2026  
-Status: ✅ Fully Implemented & Ready for Testing
+

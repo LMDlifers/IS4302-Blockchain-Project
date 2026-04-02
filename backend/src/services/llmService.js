@@ -1,7 +1,7 @@
 const axios = require("axios");
 
 /**
- * Analyze a dispute using Claude LLM
+ * Analyze a dispute using Google Gemini LLM
  * Returns a structured verdict for the contract to execute
  * @param {Object} evidence - Lease terms, claims, IPFS evidence CIDs
  * @returns {Promise<{amountToLandlord: number, confidence: number, reasoning: string}>}
@@ -47,28 +47,44 @@ Respond ONLY with valid JSON (no markdown, no explanation) in this exact format:
 
 If you cannot determine a fair split due to insufficient evidence, set confidence to 0.5 and make a conservative estimate.`;
 
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    const model = "gemini-1.5-flash";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+
+    console.log(`[GEMINI] Calling API with model: ${model}`);
+    // console.log(`[GEMINI] URL: ${url.replace(GEMINI_API_KEY, "REDACTED")}`);
+
     const response = await axios.post(
-      "https://api.anthropic.com/v1/messages",
+      url,
       {
-        model: "claude-opus-4-6",
-        max_tokens: 512,
-        messages: [{ role: "user", content: prompt }],
+        contents: [
+          {
+            parts: [
+              {
+                text: prompt,
+              },
+            ],
+          },
+        ],
       },
       {
         headers: {
-          "x-api-key": process.env.ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
+          "Content-Type": "application/json",
         },
       }
     );
 
-    const responseText = response.data.content[0].text.trim();
+    const candidates = response.data.candidates;
+    if (!candidates || candidates.length === 0) {
+      throw new Error("No candidates returned from Gemini");
+    }
 
-    // Extract JSON from response (in case there's any extra text)
+    const responseText = candidates[0].content.parts[0].text.trim();
+
+    // Extract JSON from response (in case Gemini wraps it in ```json ... ```)
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      throw new Error(`No JSON found in LLM response: ${responseText}`);
+      throw new Error(`No JSON found in Gemini response: ${responseText}`);
     }
 
     const verdict = JSON.parse(jsonMatch[0]);
@@ -79,7 +95,7 @@ If you cannot determine a fair split due to insufficient evidence, set confidenc
       typeof verdict.confidence !== "number" ||
       typeof verdict.reasoning !== "string"
     ) {
-      throw new Error("Invalid verdict structure from LLM");
+      throw new Error("Invalid verdict structure from Gemini");
     }
 
     // Clamp amount to deposit range
@@ -91,11 +107,14 @@ If you cannot determine a fair split due to insufficient evidence, set confidenc
     // Clamp confidence to 0-1
     verdict.confidence = Math.max(0, Math.min(1, verdict.confidence));
 
-    console.log("[LLM] Verdict:", verdict);
+    console.log(`[GEMINI] Verdict: ${verdict.amountToLandlord} USDC (Confidence: ${verdict.confidence})`);
     return verdict;
   } catch (err) {
-    console.error("[LLM] Analysis error:", err.message);
-    throw new Error(`LLM analysis failed: ${err.message}`);
+    console.error("[GEMINI] Analysis error:", err.message);
+    if (err.response && err.response.data) {
+      console.error("[GEMINI] API Error Data:", JSON.stringify(err.response.data));
+    }
+    throw new Error(`Gemini analysis failed: ${err.message}`);
   }
 }
 

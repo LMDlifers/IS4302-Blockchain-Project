@@ -1,30 +1,69 @@
-# Claude
+# ============================================
+# Claude / AI tooling
+# ============================================
 .claude/
+CLAUDE.md
 
+# ============================================
 # Dependencies
+# ============================================
 node_modules/
 **/node_modules/
 
-# Environment variables — NEVER commit these
+# ============================================
+# Environment Variables — NEVER COMMIT THESE
+# ============================================
 .env
 .env.local
 .env.*.local
+**/.env
+**/.env.local
+**/.env.*.local
 backend/.env
+frontend/.env
 
-# Hardhat / Solidity build artifacts
+# ============================================
+# Hardhat / Solidity Build Artifacts
+# ============================================
 contracts/artifacts/
 contracts/cache/
 contracts/typechain-types/
 contracts/coverage/
 contracts/coverage.json
+contracts/deploy_error.txt
 
-# Frontend build output
+# ============================================
+# Frontend Build Output
+# ============================================
 frontend/dist/
 frontend/.vite/
+frontend/build/
 
+# ============================================
+# Logs
+# ============================================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# ============================================
 # OS / Editor
+# ============================================
 .DS_Store
 Thumbs.db
-*.log
+desktop.ini
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# ============================================
+# Temporary / Misc
+# ============================================
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig

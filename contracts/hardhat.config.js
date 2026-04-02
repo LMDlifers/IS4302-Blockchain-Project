@@ -19,9 +19,14 @@ export default {
     },
     hardhat: {
       chainId: 1337,
+      blockGasLimit: 100000000,
+      allowUnlimitedContractSize: true,
     },
     localhost: {
       url: "http://127.0.0.1:8545",
+      chainId: 1337,
+      blockGasLimit: 100000000,
+      allowUnlimitedContractSize: true,
     },
   },
   paths: {

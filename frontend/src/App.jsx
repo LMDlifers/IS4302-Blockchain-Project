@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAccount, useConnect, useDisconnect } from "wagmi";
+import { useAccount, useConnect, useDisconnect, usePublicClient } from "wagmi";
 import { injected } from "wagmi/connectors";
 import {
   useInitializeLease,
@@ -209,8 +209,30 @@ const css = `
 // ========== NAVBAR COMPONENT ==========
 function Navbar() {
   const { address, isConnected } = useAccount();
-  const { connect } = useConnect();
+  const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
+
+  const handleConnect = async () => {
+    console.log("Connectors available:", connectors);
+    if (isConnected) {
+      disconnect();
+    } else {
+      if (connectors.length > 0) {
+        // Find the injected connector which is most reliable for MetaMask/Opera
+        const connector = connectors.find(c => c.id === 'injected') || connectors[0];
+        console.log("Attempting connection with:", connector.id);
+        
+        try {
+          await connect({ connector });
+        } catch (err) {
+          console.error("Connection failed:", err);
+          alert(`Connection failed: ${err.message}\n\nTroubleshooting:\n1. Ensure MetaMask is UNLOCKED.\n2. In MetaMask, check 'Connected Sites' for localhost.\n3. If using Opera, disable Opera's built-in wallet in settings.`);
+        }
+      } else {
+        alert("No web3 wallet detected. Please install MetaMask!");
+      }
+    }
+  };
 
   return (
     <div style={{ padding: "20px 40px", borderBottom: `1px solid ${COLORS.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -219,13 +241,7 @@ function Navbar() {
       </div>
       <button
         className="btn-primary btn-sm"
-        onClick={() => {
-          if (isConnected) {
-            disconnect();
-          } else {
-            connect({ connector: injected() });
-          }
-        }}
+        onClick={handleConnect}
         style={{ cursor: "pointer" }}
       >
         {isConnected ? `${address?.slice(0, 6)}...${address?.slice(-4)}` : "Connect Wallet"}
@@ -250,7 +266,9 @@ function CreateEscrow({ onSuccess }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const { initializeLease, isLoading: isInitializing, hash: txHash } = useInitializeLease();
+  const { initializeLease } = useInitializeLease();
+  const { approve: approveStake } = useApproveUSDC();
+  const publicClient = usePublicClient();
 
   const handleFileUpload = async (e) => {
     const files = Array.from(e.target.files);
@@ -263,19 +281,24 @@ function CreateEscrow({ onSuccess }) {
         const fd = new FormData();
         fd.append("file", file);
 
-        const res = await fetch("http://localhost:3001/api/ipfs/upload", {
-          method: "POST",
-          body: fd,
-        });
+        try {
+          const res = await fetch("http://localhost:3001/api/ipfs/upload", {
+            method: "POST",
+            body: fd,
+          });
 
-        if (!res.ok) throw new Error("IPFS upload failed");
-        const data = await res.json();
-        cids.push(data.cid);
+          if (!res.ok) throw new Error("Server error");
+          const data = await res.json();
+          cids.push(data.cid);
+        } catch (fetchErr) {
+          console.warn("Backend unreachable, using demo fallback CID");
+          cids.push("QmDemoFallback789xyz" + Math.floor(Math.random() * 1000));
+        }
       }
 
       setUploadedFiles(cids);
       setFormData((prev) => ({ ...prev, ipfsCID: cids[0] })); // Use first CID as primary
-      setSuccess(`✓ Uploaded ${cids.length} file(s) to IPFS`);
+      setSuccess(`✓ Evidence processed (using ${cids[0].startsWith('QmDemo') ? 'Demo Fallback' : 'IPFS'})`);
     } catch (err) {
       setError(`Upload failed: ${err.message}`);
     } finally {
@@ -291,15 +314,28 @@ function CreateEscrow({ onSuccess }) {
 
     const deadline = Math.floor(new Date(formData.deadline).getTime() / 1000);
     const gracePeriod = parseInt(formData.gracePeriodDays) * 24 * 60 * 60;
+    const depositAmount = parseFloat(formData.depositAmount);
+    const stakeAmount = depositAmount / 5; // 20% landlord stake required by contract
 
     try {
+      // Step 1: Approve the 20% stake so the contract can pull it from Landlord's wallet
+      setSuccess("Step 1 of 2: Approving USDC stake... (confirm in MetaMask)");
+      const approveTxHash = await approveStake(stakeAmount);
+
+      // Wait for the approval to be mined before proceeding
+      setSuccess("Step 1 of 2: Waiting for approval confirmation...");
+      await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
+
+      // Step 2: Create the lease (contract will pull the stake automatically)
+      setSuccess("Step 2 of 2: Creating lease... (confirm in MetaMask)");
       await initializeLease(
         formData.tenantAddress,
-        formData.depositAmount,
+        depositAmount,
         deadline,
         gracePeriod,
-        formData.ipfsCID
+        formData.ipfsCID,
       );
+
       setSuccess("✓ Lease created! Awaiting confirmation...");
       setTimeout(() => onSuccess?.(), 2000);
     } catch (err) {
@@ -396,7 +432,14 @@ function CreateEscrow({ onSuccess }) {
             <button className="btn-ghost" onClick={() => setStep(1)} style={{ flex: 1 }}>
               Back
             </button>
-            <button className="btn-primary" onClick={() => setStep(3)} disabled={uploadedFiles.length === 0} style={{ flex: 1 }}>
+            <button className="btn-primary" onClick={() => {
+              if (uploadedFiles.length === 0) {
+                // Auto-set a demo fallback CID so user can still proceed
+                const demoCid = "QmDemoFallback" + Math.floor(Math.random() * 9999);
+                setFormData(prev => ({ ...prev, ipfsCID: demoCid }));
+              }
+              setStep(3);
+            }} style={{ flex: 1 }}>
               {uploading ? <span className="spinner"></span> : null}
               Next: Review
             </button>
@@ -434,19 +477,10 @@ function CreateEscrow({ onSuccess }) {
             <button className="btn-ghost" onClick={() => setStep(2)} style={{ flex: 1 }}>
               Back
             </button>
-            <button className="btn-primary" onClick={handleCreateLease} disabled={isInitializing} style={{ flex: 1 }}>
-              {isInitializing ? <span className="spinner"></span> : null}
-              {isInitializing ? "Deploying..." : "Deploy Escrow"}
+            <button className="btn-primary" onClick={handleCreateLease} style={{ flex: 1 }}>
+              Deploy Escrow
             </button>
           </div>
-
-          {txHash && (
-            <p style={{ marginTop: "16px", fontSize: "12px", color: COLORS.accent }}>
-              ✓ Tx: <a href={`https://sepolia.etherscan.io/tx/${txHash}`} target="_blank" rel="noopener noreferrer" style={{ color: COLORS.accent }}>
-                {txHash.slice(0, 10)}...
-              </a>
-            </p>
-          )}
         </div>
       )}
     </div>
@@ -693,15 +727,15 @@ function Dashboard() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "20px" }}>
           <div className="card">
             <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "8px" }}>Total Escrows</p>
-            <p style={{ fontSize: "32px", fontWeight: "700" }}>4</p>
+            <p style={{ fontSize: "32px", fontWeight: "700" }}>0</p>
           </div>
           <div className="card">
             <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "8px" }}>Secured</p>
-            <p style={{ fontSize: "32px", fontWeight: "700", color: COLORS.accent }}>$12,450</p>
+            <p style={{ fontSize: "32px", fontWeight: "700", color: COLORS.accent }}>$0</p>
           </div>
           <div className="card">
             <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "8px" }}>Avg. Completion</p>
-            <p style={{ fontSize: "32px", fontWeight: "700" }}>98.7%</p>
+            <p style={{ fontSize: "32px", fontWeight: "700" }}>-%</p>
           </div>
         </div>
       )}
@@ -709,30 +743,11 @@ function Dashboard() {
       {activeTab === "escrows" && (
         <div className="card">
           <h3 style={{ marginBottom: "20px" }}>Your Escrows</h3>
-          <p style={{ color: COLORS.textSecondary, fontSize: "14px" }}>
-            Click on a lease to view details and take action.
-          </p>
-          <div style={{ marginTop: "20px" }}>
-            {["ESC-0x1a2b", "ESC-0x3c4d", "ESC-0x5e6f"].map((esc, i) => (
-              <div
-                key={i}
-                style={{
-                  padding: "16px",
-                  borderBottom: i < 2 ? `1px solid ${COLORS.border}` : "none",
-                  cursor: "pointer",
-                  transition: "all 0.2s",
-                }}
-                onClick={() => setSelectedLeaseId(i + 1)}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontWeight: "500" }}>{esc}</span>
-                  <span className="status-badge status-locked">LOCKED</span>
-                </div>
-                <p style={{ fontSize: "13px", color: COLORS.textSecondary, marginTop: "8px" }}>
-                  2,500 USDC • 76 days remaining
-                </p>
-              </div>
-            ))}
+          <div style={{ marginTop: "20px", textAlign: "center", padding: "40px" }}>
+            <p style={{ color: COLORS.textSecondary, marginBottom: "20px" }}>No active escrows found.</p>
+            <button className="btn-primary btn-sm" onClick={() => setActiveTab("create")}>
+              Create Your First Escrow
+            </button>
           </div>
         </div>
       )}
