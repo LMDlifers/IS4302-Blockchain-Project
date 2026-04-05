@@ -16,7 +16,8 @@ contract EscrowManager is ReentrancyGuard, Ownable {
         uint256 landlordStake;
         uint256 deadline;
         uint256 gracePeriod;
-        string  ipfsCID;
+        string  moveInCID;    // IPFS CID for move-in metadata (photos + lease doc)
+        string  moveOutCID;   // IPFS CID for move-out claim (damage photos + description)
         LeaseState state;
         uint256 amountToLandlord;
     }
@@ -28,12 +29,13 @@ contract EscrowManager is ReentrancyGuard, Ownable {
     address[] public verifierPool;
     mapping(uint256 => uint256) public pendingProposal;
 
-    event LeaseInitialized(uint256 leaseId, address landlord, address tenant, string cid);
+    event LeaseInitialized(uint256 leaseId, address landlord, address tenant, string moveInCID);
     event FundsDeposited(uint256 leaseId, uint256 amount);
     event DisputeRaised(uint256 leaseId, address verifier);
     event DisputeResolved(uint256 leaseId, uint256 toLandlord, uint256 toTenant);
     event LeaseReleased(uint256 leaseId, uint256 toLandlord, uint256 toTenant);
     event LeaseRefunded(uint256 leaseId, uint256 toTenant);
+    event MoveOutCIDSet(uint256 leaseId, string moveOutCID);
 
     modifier onlyLandlord(uint256 id) {
         require(msg.sender == leases[id].landlord, "Not landlord");
@@ -67,12 +69,12 @@ contract EscrowManager is ReentrancyGuard, Ownable {
         uint256 depositAmount,
         uint256 deadline,
         uint256 gracePeriod,
-        string calldata ipfsCID
+        string calldata moveInCID   // <-- renamed from ipfsCID
     ) external returns (uint256 leaseId) {
         require(deadline > block.timestamp, "Deadline in past");
         require(depositAmount > 0, "Zero deposit");
         
-        uint256 stake = depositAmount / 5; // 20% stake requirement
+        uint256 stake = depositAmount / 5;
         require(usdc.transferFrom(msg.sender, address(this), stake), "Stake transfer failed");
         
         leaseId = ++leaseCounter;
@@ -84,22 +86,16 @@ contract EscrowManager is ReentrancyGuard, Ownable {
             landlordStake: stake,
             deadline: deadline,
             gracePeriod: gracePeriod,
-            ipfsCID: ipfsCID,
+            moveInCID: moveInCID,
+            moveOutCID: "",
             state: LeaseState.CREATED,
             amountToLandlord: 0
         });
         
-        emit LeaseInitialized(leaseId, msg.sender, tenant, ipfsCID);
+        emit LeaseInitialized(leaseId, msg.sender, tenant, moveInCID);
         return leaseId;
     }
 
-    // ========== DEPOSIT FUNDS (Tenant) ==========
-
-    /**
-     * @dev Tenant deposits funds into escrow.
-     * Moves lease from CREATED → LOCKED.
-     * Requires prior ERC-20 approval.
-     */
     function depositFunds(uint256 leaseId)
         external
         onlyTenant(leaseId)
@@ -116,8 +112,6 @@ contract EscrowManager is ReentrancyGuard, Ownable {
         emit FundsDeposited(leaseId, l.depositAmount);
     }
 
-    // ========== VERIFIER POOL MANAGEMENT (onlyOwner) ==========
-
     function addVerifier(address v) external onlyOwner {
         require(v != address(0), "Invalid verifier address");
         verifierPool.push(v);
@@ -133,13 +127,18 @@ contract EscrowManager is ReentrancyGuard, Ownable {
         }
     }
 
-    // ========== SCENARIO A: MUTUAL RELEASE (Happy Path) ==========
+    // ========== SCENARIO A: MUTUAL RELEASE ==========
 
     /**
-     * @dev Landlord proposes a split of the deposit.
-     * State remains LOCKED until tenant accepts.
+     * @dev Landlord proposes a split AND uploads move-out evidence CID.
+     * The moveOutCID should reference IPFS metadata containing damage photos
+     * and a written claim description.
      */
-    function proposeRelease(uint256 leaseId, uint256 amountToLandlord)
+    function proposeRelease(
+        uint256 leaseId,
+        uint256 amountToLandlord,
+        string calldata moveOutCID   // <-- NEW: damage photos CID
+    )
         external
         onlyLandlord(leaseId)
         inState(leaseId, LeaseState.LOCKED)
@@ -147,15 +146,11 @@ contract EscrowManager is ReentrancyGuard, Ownable {
         Lease storage l = leases[leaseId];
         require(amountToLandlord <= l.depositAmount, "Exceeds deposit");
         l.amountToLandlord = amountToLandlord;
+        l.moveOutCID = moveOutCID;
         pendingProposal[leaseId] = amountToLandlord;
+        emit MoveOutCIDSet(leaseId, moveOutCID);
     }
 
-    /**
-     * @dev Tenant accepts the landlord's proposed split.
-     * Funds are transferred: landlord gets deposit split + stake back,
-     * tenant gets the remainder.
-     * State: LOCKED → RELEASED
-     */
     function acceptRelease(uint256 leaseId)
         external
         onlyTenant(leaseId)
@@ -172,18 +167,12 @@ contract EscrowManager is ReentrancyGuard, Ownable {
 
         emit LeaseReleased(leaseId, toLandlord, toTenant);
 
-        // Checks-Effects-Interactions: state updated before transfers
         require(usdc.transfer(l.landlord, toLandlord), "Landlord transfer failed");
         require(usdc.transfer(l.tenant, toTenant), "Tenant transfer failed");
     }
 
-    // ========== SCENARIO B: TIMEOUT / NO-SHOW REFUND ==========
+    // ========== SCENARIO B: TIMEOUT REFUND ==========
 
-    /**
-     * @dev Anyone can call this after deadline + grace period expires.
-     * Tenant gets full deposit back, landlord's stake is slashed to feeAddress.
-     * State: LOCKED → REFUNDED
-     */
     function timeoutRefund(uint256 leaseId)
         external
         inState(leaseId, LeaseState.LOCKED)
@@ -202,7 +191,6 @@ contract EscrowManager is ReentrancyGuard, Ownable {
 
         emit LeaseRefunded(leaseId, deposit);
 
-        // Checks-Effects-Interactions: state updated before transfers
         require(usdc.transfer(l.tenant, deposit), "Tenant refund failed");
         require(usdc.transfer(feeAddress, stake), "Stake slash failed");
     }
@@ -210,8 +198,9 @@ contract EscrowManager is ReentrancyGuard, Ownable {
     // ========== SCENARIO C: DISPUTE WITH LLM JUDGE ==========
 
     /**
-     * @dev Tenant raises a dispute. A verifier is randomly assigned.
-     * State: LOCKED → DISPUTED
+     * @dev Tenant raises a dispute. Uses the already-stored moveOutCID
+     * (set by landlord during proposeRelease) as damage evidence.
+     * If landlord hasn't proposed yet, tenant can still dispute with empty moveOutCID.
      */
     function raiseDispute(uint256 leaseId)
         external
@@ -224,11 +213,6 @@ contract EscrowManager is ReentrancyGuard, Ownable {
         emit DisputeRaised(leaseId, l.verifier);
     }
 
-    /**
-     * @dev Internal function to assign a verifier from the pool.
-     * WARNING: Uses block.timestamp-based pseudo-randomness.
-     * For production, use Chainlink VRF.
-     */
     function _assignVerifier(uint256 leaseId) internal view returns (address) {
         require(verifierPool.length > 0, "No verifiers in pool");
         uint256 idx = uint256(
@@ -237,10 +221,6 @@ contract EscrowManager is ReentrancyGuard, Ownable {
         return verifierPool[idx];
     }
 
-    /**
-     * @dev Verifier submits the LLM verdict, splitting the deposit.
-     * State: DISPUTED → RELEASED
-     */
     function resolveDispute(uint256 leaseId, uint256 amountToLandlord)
         external
         onlyVerifier(leaseId)
@@ -257,7 +237,6 @@ contract EscrowManager is ReentrancyGuard, Ownable {
 
         emit DisputeResolved(leaseId, toLandlord, toTenant);
 
-        // Checks-Effects-Interactions: state updated before transfers
         require(usdc.transfer(l.landlord, toLandlord), "Landlord transfer failed");
         require(usdc.transfer(l.tenant, toTenant), "Tenant transfer failed");
     }

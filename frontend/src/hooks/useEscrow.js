@@ -94,23 +94,26 @@ export function useInitializeLease() {
  * Hook for landlord to propose a release split
  * Specifies how much of deposit they want to keep
  */
+/**
+ * Hook for landlord to propose a release split
+ * Specifies how much of deposit they want to keep and provides damage evidence
+ */
 export function useProposeRelease() {
-  const { writeContract, data: hash } = useWriteContract();
-  const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
+  const { writeContractAsync } = useWriteContract();
 
-  const propose = (leaseId, amountToLandlord, options = {}) => {
+  const propose = async (leaseId, amountToLandlord, moveOutCID, options = {}) => {
     const parsedAmount = parseUnits(String(amountToLandlord), 6);
-    return writeContract({
+    return writeContractAsync({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "proposeRelease",
-      args: [leaseId, parsedAmount],
+      args: [leaseId, parsedAmount, moveOutCID], // Added moveOutCID here
       gas: 3000000n,
       ...options,
     });
   };
 
-  return { propose, isLoading, isSuccess, hash };
+  return { propose };
 }
 
 /**

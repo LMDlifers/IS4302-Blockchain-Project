@@ -1,5 +1,4 @@
-import pkg from "hardhat";
-const { ethers } = pkg;
+const { ethers } = require("hardhat");
 
 async function main() {
   console.log("🚀 Deploying RentLock contracts...\n");
