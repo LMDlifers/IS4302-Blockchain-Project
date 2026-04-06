@@ -481,6 +481,9 @@ function EscrowDetail({ leaseId, onBack }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [proposedAmount, setProposedAmount] = useState("");
+  const [moveInPhotos, setMoveInPhotos] = useState([]);
+  const [moveOutPhotos, setMoveOutPhotos] = useState([]);
+  const [loadingPhotos, setLoadingPhotos] = useState(false);
 
     if (isLoading) return <div style={{ padding: "40px" }}>Loading lease from blockchain...</div>;
   if (isError || !lease) return <div style={{ padding: "40px" }}>Error loading lease data.</div>;
@@ -513,19 +516,52 @@ function EscrowDetail({ leaseId, onBack }) {
   // Divide by 1,000,000 to remove the 6 USDC decimals
   const displayDeposit = (Number(depositAmountRaw || 0) / 1_000_000).toFixed(2);
   const displayStake = (Number(landlordStakeRaw || 0) / 1_000_000).toFixed(2);
+  
+      useEffect(() => {
+    async function fetchEvidence() {
+      // Check if we have at least one CID to fetch
+      if ((!moveInCIDRaw || moveInCIDRaw === "") && (!moveOutCIDRaw || moveOutCIDRaw === "")) return;
+      
+      setLoadingPhotos(true);
+      try {
+        const fetchPromises = [];
 
-    const handleDeposit = async () => {
-    try {
-      // Use depositAmountRaw (which we already destructured) instead of lease.depositAmount
-      await approve(depositAmountRaw.toString());
-      setSuccess("✓ USDC approved. Now depositing...");
-      await deposit(leaseId);
-      setSuccess("✓ Funds deposited! Lease is now LOCKED");
-      setTimeout(() => refetch(), 2000);
-    } catch (err) {
-      setError(`Deposit failed: ${err.message}`);
+        // 1. Fetch Move-In Evidence
+        if (moveInCIDRaw && moveInCIDRaw !== "") {
+          fetchPromises.push(
+            fetch(`https://gateway.pinata.cloud/ipfs/${moveInCIDRaw}`)
+              .then(res => res.json())
+              .then(metadata => {
+                if (metadata.moveInPhotoCIDs && Array.isArray(metadata.moveInPhotoCIDs)) {
+                  setMoveInPhotos(metadata.moveInPhotoCIDs);
+                }
+              })
+              .catch(err => console.error("Failed to fetch move-in evidence:", err))
+          );
+        }
+
+        // 2. Fetch Move-Out Evidence
+        if (moveOutCIDRaw && moveOutCIDRaw !== "") {
+          fetchPromises.push(
+            fetch(`https://gateway.pinata.cloud/ipfs/${moveOutCIDRaw}`)
+              .then(res => res.json())
+              .then(metadata => {
+                if (metadata.moveOutPhotoCIDs && Array.isArray(metadata.moveOutPhotoCIDs)) {
+                  setMoveOutPhotos(metadata.moveOutPhotoCIDs);
+                }
+              })
+              .catch(err => console.error("Failed to fetch move-out evidence:", err))
+          );
+        }
+
+        await Promise.all(fetchPromises);
+      } finally {
+        setLoadingPhotos(false);
+      }
     }
-  };
+
+    fetchEvidence();
+  }, [moveInCIDRaw, moveOutCIDRaw]);
 
   return (
     <div style={{ padding: "40px", maxWidth: "800px" }}>
@@ -669,46 +705,133 @@ function EscrowDetail({ leaseId, onBack }) {
         );
       })()}
 
-      {/* Tenant Review Actions (Accept or Dispute) */}
-      {isTenant && stateIndex === 1 && moveOutCIDRaw !== "" && (
-        <div className="card" style={{ marginBottom: "20px", background: `${COLORS.blue}15` }}>
-          <h3 style={{ marginBottom: "16px", color: COLORS.blue }}>Review Landlord's Proposal</h3>
-          <p style={{ marginBottom: "16px", fontSize: "14px" }}>
-            The landlord has proposed a release. You can either accept the proposal to finalize the escrow, or raise a dispute if you disagree with the claimed damages.
-          </p>
-          <div style={{ display: "flex", gap: "12px" }}>
-            <button 
-              className="btn-primary" 
-              onClick={async () => {
-                try {
-                  await accept(leaseId);
-                  setSuccess("✓ Proposal accepted! Funds have been released.");
-                  setTimeout(() => refetch(), 2000);
-                } catch (err) { setError(`Accept failed: ${err.message}`); }
-              }} 
-              disabled={accepting} 
-              style={{ background: COLORS.green }}
-            >
-              {accepting ? <span className="spinner"></span> : "Accept & Release"}
-            </button>
+            {/* Tenant Review Actions (Accept or Dispute) */}
+      {isTenant && stateIndex === 1 && moveOutCIDRaw !== "" && (() => {
+        // Calculate the math to show the tenant
+        const proposedLandlordAmount = Number(amountToLandlordRaw) / 1_000_000;
+        const tenantRefundAmount = displayDeposit - proposedLandlordAmount;
 
-            <button 
-              className="btn-primary" 
-              onClick={async () => {
-                try {
-                  await raise(leaseId);
-                  setSuccess("✓ Dispute raised. AI judge is analyzing...");
-                  setTimeout(() => refetch(), 2000);
-                } catch (err) { setError(`Dispute failed: ${err.message}`); }
-              }} 
-              disabled={raising} 
-              style={{ background: COLORS.red }}
-            >
-              {raising ? <span className="spinner"></span> : "Raise Dispute"}
-            </button>
+                return (
+          <div className="card" style={{ marginBottom: "20px", background: `${COLORS.blue}15` }}>
+            <h3 style={{ marginBottom: "16px", color: COLORS.blue }}>Review Landlord's Proposal</h3>
+            
+            <div style={{ 
+              marginBottom: "20px", 
+              padding: "16px", 
+              background: "rgba(0, 0, 0, 0.2)", 
+              borderRadius: "8px", 
+              border: `1px solid ${COLORS.blue}` 
+            }}>
+              <h4 style={{ marginBottom: "12px", color: COLORS.blue }}>Proposed Split</h4>
+              <p style={{ marginBottom: "8px", color: COLORS.textPrimary }}>
+                <strong>Landlord keeps:</strong> {proposedLandlordAmount.toFixed(2)} USDC
+              </p>
+              <p style={{ color: COLORS.textPrimary, marginBottom: "16px" }}>
+                <strong>Your refund:</strong> {tenantRefundAmount.toFixed(2)} USDC
+              </p>
+
+              {/* Render IPFS Evidence Images (Move-in vs Move-out) */}
+              {proposedLandlordAmount > 0 && (
+                <div style={{ marginTop: "16px", paddingTop: "16px", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+                  <p style={{ color: COLORS.textPrimary, fontSize: "14px", marginBottom: "12px", fontWeight: "bold" }}>
+                    Evidence Comparison:
+                  </p>
+                  
+                  {loadingPhotos ? (
+                    <div style={{ padding: "20px", textAlign: "center" }}><span className="spinner"></span> Loading photos from IPFS...</div>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+                      
+                      {/* COLUMN 1: MOVE-IN (BASELINE) */}
+                      <div style={{ background: "rgba(0,0,0,0.15)", padding: "12px", borderRadius: "8px" }}>
+                        <p style={{ fontSize: "12px", color: COLORS.textSecondary, marginBottom: "8px" }}>Move-in (Baseline)</p>
+                        {moveInPhotos.length > 0 ? (
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: "8px" }}>
+                            {moveInPhotos.map((photoCid, index) => {
+                              if (photoCid.includes("Fallback")) return <div key={index} style={{ fontSize: "11px", color: COLORS.textSecondary }}>No photos.</div>;
+                              return (
+                                <a key={index} href={`https://gateway.pinata.cloud/ipfs/${photoCid}`} target="_blank" rel="noopener noreferrer">
+                                  <img 
+                                    src={`https://gateway.pinata.cloud/ipfs/${photoCid}`} 
+                                    alt={`Move-in ${index + 1}`}
+                                    style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "6px", border: `1px solid ${COLORS.border}` }}
+                                  />
+                                </a>
+                              )
+                            })}
+                          </div>
+                        ) : (
+                          <p style={{ fontSize: "11px", color: COLORS.textSecondary }}>No baseline photos found.</p>
+                        )}
+                      </div>
+
+                      {/* COLUMN 2: MOVE-OUT (DAMAGE) */}
+                      <div style={{ background: "rgba(255,0,0,0.05)", padding: "12px", borderRadius: "8px", border: `1px solid rgba(255,0,0,0.1)` }}>
+                        <p style={{ fontSize: "12px", color: COLORS.red, marginBottom: "8px" }}>Move-out (Claimed Damages)</p>
+                        {moveOutPhotos.length > 0 ? (
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: "8px" }}>
+                            {moveOutPhotos.map((photoCid, index) => {
+                              if (photoCid.includes("Fallback")) return <div key={index} style={{ fontSize: "11px", color: COLORS.textSecondary }}>No photos.</div>;
+                              return (
+                                <a key={index} href={`https://gateway.pinata.cloud/ipfs/${photoCid}`} target="_blank" rel="noopener noreferrer">
+                                  <img 
+                                    src={`https://gateway.pinata.cloud/ipfs/${photoCid}`} 
+                                    alt={`Move-out ${index + 1}`}
+                                    style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "6px", border: `1px solid ${COLORS.border}` }}
+                                  />
+                                </a>
+                              )
+                            })}
+                          </div>
+                        ) : (
+                          <p style={{ fontSize: "11px", color: COLORS.textSecondary }}>No damage photos found.</p>
+                        )}
+                      </div>
+
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <p style={{ marginBottom: "16px", fontSize: "14px" }}>
+              The landlord has submitted move-out evidence and proposed the split above. You can either accept the proposal to finalize the escrow, or raise a dispute if you disagree with the claimed damages.
+            </p>
+            
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button 
+                className="btn-primary" 
+                onClick={async () => {
+                  try {
+                    await accept(leaseId);
+                    setSuccess("✓ Proposal accepted! Funds have been released.");
+                    setTimeout(() => refetch(), 2000);
+                  } catch (err) { setError(`Accept failed: ${err.message}`); }
+                }} 
+                disabled={accepting} 
+                style={{ background: COLORS.green }}
+              >
+                {accepting ? <span className="spinner"></span> : "Accept & Release"}
+              </button>
+
+              <button 
+                className="btn-primary" 
+                onClick={async () => {
+                  try {
+                    await raise(leaseId);
+                    setSuccess("✓ Dispute raised. AI judge is analyzing...");
+                    setTimeout(() => refetch(), 2000);
+                  } catch (err) { setError(`Dispute failed: ${err.message}`); }
+                }} 
+                disabled={raising} 
+                style={{ background: COLORS.red }}
+              >
+                {raising ? <span className="spinner"></span> : "Raise Dispute"}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
