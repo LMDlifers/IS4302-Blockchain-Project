@@ -514,9 +514,10 @@ function EscrowDetail({ leaseId, onBack }) {
   const displayDeposit = (Number(depositAmountRaw || 0) / 1_000_000).toFixed(2);
   const displayStake = (Number(landlordStakeRaw || 0) / 1_000_000).toFixed(2);
 
-  const handleDeposit = async () => {
+    const handleDeposit = async () => {
     try {
-      await approve(lease.depositAmount.toString());
+      // Use depositAmountRaw (which we already destructured) instead of lease.depositAmount
+      await approve(depositAmountRaw.toString());
       setSuccess("✓ USDC approved. Now depositing...");
       await deposit(leaseId);
       setSuccess("✓ Funds deposited! Lease is now LOCKED");
@@ -668,20 +669,44 @@ function EscrowDetail({ leaseId, onBack }) {
         );
       })()}
 
-      {/* Tenant Dispute Action */}
-      {isTenant && stateIndex === 1 && (
-        <div className="card" style={{ marginBottom: "20px", background: `${COLORS.red}15` }}>
-          <h3 style={{ marginBottom: "16px", color: COLORS.red }}>Raise a Dispute</h3>
-          <p style={{ marginBottom: "16px", fontSize: "14px" }}>Disagree with the landlord? Raise a dispute for AI arbitration.</p>
-          <button className="btn-primary" onClick={async () => {
-            try {
-              await raise(leaseId);
-              setSuccess("✓ Dispute raised. AI judge is analyzing...");
-              setTimeout(() => refetch(), 2000);
-            } catch (err) { setError(`Dispute failed: ${err.message}`); }
-          }} disabled={raising} style={{ background: COLORS.red }}>
-            {raising ? <span className="spinner"></span> : "Raise Dispute"}
-          </button>
+      {/* Tenant Review Actions (Accept or Dispute) */}
+      {isTenant && stateIndex === 1 && moveOutCIDRaw !== "" && (
+        <div className="card" style={{ marginBottom: "20px", background: `${COLORS.blue}15` }}>
+          <h3 style={{ marginBottom: "16px", color: COLORS.blue }}>Review Landlord's Proposal</h3>
+          <p style={{ marginBottom: "16px", fontSize: "14px" }}>
+            The landlord has proposed a release. You can either accept the proposal to finalize the escrow, or raise a dispute if you disagree with the claimed damages.
+          </p>
+          <div style={{ display: "flex", gap: "12px" }}>
+            <button 
+              className="btn-primary" 
+              onClick={async () => {
+                try {
+                  await accept(leaseId);
+                  setSuccess("✓ Proposal accepted! Funds have been released.");
+                  setTimeout(() => refetch(), 2000);
+                } catch (err) { setError(`Accept failed: ${err.message}`); }
+              }} 
+              disabled={accepting} 
+              style={{ background: COLORS.green }}
+            >
+              {accepting ? <span className="spinner"></span> : "Accept & Release"}
+            </button>
+
+            <button 
+              className="btn-primary" 
+              onClick={async () => {
+                try {
+                  await raise(leaseId);
+                  setSuccess("✓ Dispute raised. AI judge is analyzing...");
+                  setTimeout(() => refetch(), 2000);
+                } catch (err) { setError(`Dispute failed: ${err.message}`); }
+              }} 
+              disabled={raising} 
+              style={{ background: COLORS.red }}
+            >
+              {raising ? <span className="spinner"></span> : "Raise Dispute"}
+            </button>
+          </div>
         </div>
       )}
     </div>

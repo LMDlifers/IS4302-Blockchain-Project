@@ -152,24 +152,26 @@ contract EscrowManager is ReentrancyGuard, Ownable {
     }
 
     function acceptRelease(uint256 leaseId)
-        external
-        onlyTenant(leaseId)
-        inState(leaseId, LeaseState.LOCKED)
-        nonReentrant
+    external
+    onlyTenant(leaseId)
+    inState(leaseId, LeaseState.LOCKED)
+    // nonReentrant (keep this if you are using ReentrancyGuard)
     {
-        Lease storage l = leases[leaseId];
-        require(l.amountToLandlord > 0 || pendingProposal[leaseId] == 0, "No proposal");
+    Lease storage l = leases[leaseId];
+    
+    // SECURITY FIX: Ensure the Landlord has actually submitted a proposal
+    require(bytes(l.moveOutCID).length > 0, "Landlord has not proposed a release yet");
 
-        uint256 toLandlord = l.amountToLandlord + l.landlordStake;
-        uint256 toTenant = l.depositAmount - l.amountToLandlord;
+    uint256 toLandlord = l.amountToLandlord + l.landlordStake;
+    uint256 toTenant = l.depositAmount - l.amountToLandlord;
 
-        l.state = LeaseState.RELEASED;
+    l.state = LeaseState.RELEASED;
 
-        emit LeaseReleased(leaseId, toLandlord, toTenant);
+    emit LeaseReleased(leaseId, toLandlord, toTenant);
 
-        require(usdc.transfer(l.landlord, toLandlord), "Landlord transfer failed");
-        require(usdc.transfer(l.tenant, toTenant), "Tenant transfer failed");
-    }
+    require(usdc.transfer(l.landlord, toLandlord), "Landlord transfer failed");
+    require(usdc.transfer(l.tenant, toTenant), "Tenant transfer failed");
+}
 
     // ========== SCENARIO B: TIMEOUT REFUND ==========
 
