@@ -3,7 +3,7 @@ const cors = require('cors');
 const multer = require('multer');
 require('dotenv').config();
 
-const { startDisputeListener } = require('./listeners/disputeListener');
+const { startDisputeListener, pendingHumanReviews, savePendingReviews } = require('./listeners/disputeListener');
 const { startLeaseListeners } = require('./listeners/leaseListener');
 const { escrow } = require('./provider');
 const { createPaymentChallenge, verifyPayment } = require('./services/x402Service');
@@ -86,23 +86,11 @@ app.get('/api/leases', async (req, res) => {
   try {
     const user = req.query.user?.toLowerCase();
     
-    // Instead of using leaseCounter, we fetch leases sequentially until we hit an empty one
     const leases = [];
-    let currentId = 1;
-    
-    while (true) {
-      try {
-        const lease = await escrow.leases(currentId);
-        // An empty lease will have address(0) as landlord
-        if (!lease || lease.landlord === '0x0000000000000000000000000000000000000000') {
-          break; // We've reached the end of the created leases
-        }
-        
-        leases.push(serializeLease(currentId, lease));
-        currentId++;
-      } catch (err) {
-        break; // If calling escrow.leases(id) fails, we've reached the end
-      }
+    const count = Number(await escrow.leaseCounter());
+    for (let id = 1; id <= count; id++) {
+      const lease = await escrow.leases(id);
+      leases.push(serializeLease(id, lease));
     }
 
     const filteredLeases = user
@@ -143,7 +131,8 @@ app.get('/api/leases/:id', async (req, res) => {
       landlordStake: lease.landlordStake.toString(),
       deadline: lease.deadline.toString(),
       gracePeriod: lease.gracePeriod.toString(),
-      ipfsCID: lease.ipfsCID,
+      moveInCID: lease.moveInCID || "",
+      moveOutCID: lease.moveOutCID || "",
       state: Number(lease.state),
       amountToLandlord: lease.amountToLandlord.toString(),
     });
@@ -179,6 +168,47 @@ app.post('/api/disputes/analyze', async (req, res) => {
     });
   } catch (err) {
     console.error('[Error] POST /api/disputes/analyze', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========== HUMAN-IN-THE-LOOP DISPUTE REVIEW ==========
+
+app.get('/api/disputes/pending', (req, res) => {
+  const list = [...pendingHumanReviews.values()].filter(r => r.status === 'pending');
+  res.json({ count: list.length, disputes: list });
+});
+
+app.post('/api/disputes/:leaseId/human-resolve', async (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (process.env.ADMIN_SECRET && secret !== process.env.ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { leaseId } = req.params;
+  const { amountToLandlord } = req.body;
+
+  if (amountToLandlord === undefined) {
+    return res.status(400).json({ error: 'amountToLandlord required' });
+  }
+
+  const review = pendingHumanReviews.get(leaseId);
+  if (!review) return res.status(404).json({ error: 'No pending review for this lease' });
+  if (review.status !== 'pending') return res.status(409).json({ error: 'Already resolved' });
+
+  try {
+    const amountBN = BigInt(Math.round(Number(amountToLandlord)));
+    const tx = await escrow.resolveDispute(BigInt(leaseId), amountBN);
+    const receipt = await tx.wait();
+    review.status = 'resolved';
+    review.resolvedAt = new Date().toISOString();
+    review.finalAmountToLandlord = amountToLandlord.toString();
+    review.txHash = receipt.hash;
+    savePendingReviews();
+    console.log(`[HITL] ✓ Lease #${leaseId} manually resolved. Tx: ${receipt.hash}`);
+    res.json({ success: true, txHash: receipt.hash });
+  } catch (err) {
+    console.error(`[Error] POST /api/disputes/${leaseId}/human-resolve`, err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -36,6 +36,7 @@ contract EscrowManager is ReentrancyGuard, Ownable {
     event LeaseReleased(uint256 leaseId, uint256 toLandlord, uint256 toTenant);
     event LeaseRefunded(uint256 leaseId, uint256 toTenant);
     event MoveOutCIDSet(uint256 leaseId, string moveOutCID);
+    event ReleaseProposed(uint256 indexed leaseId, uint256 amountToLandlord, string moveOutCID);
 
     modifier onlyLandlord(uint256 id) {
         require(msg.sender == leases[id].landlord, "Not landlord");
@@ -148,35 +149,36 @@ contract EscrowManager is ReentrancyGuard, Ownable {
         l.amountToLandlord = amountToLandlord;
         l.moveOutCID = moveOutCID;
         pendingProposal[leaseId] = amountToLandlord;
+        emit ReleaseProposed(leaseId, amountToLandlord, moveOutCID);
         emit MoveOutCIDSet(leaseId, moveOutCID);
     }
 
     function acceptRelease(uint256 leaseId)
-    external
-    onlyTenant(leaseId)
-    inState(leaseId, LeaseState.LOCKED)
-    // nonReentrant (keep this if you are using ReentrancyGuard)
+        external
+        onlyTenant(leaseId)
+        inState(leaseId, LeaseState.LOCKED)
+        nonReentrant
     {
-    Lease storage l = leases[leaseId];
-    
-    // SECURITY FIX: Ensure the Landlord has actually submitted a proposal
-    require(bytes(l.moveOutCID).length > 0, "Landlord has not proposed a release yet");
+        Lease storage l = leases[leaseId];
 
-    uint256 toLandlord = l.amountToLandlord + l.landlordStake;
-    uint256 toTenant = l.depositAmount - l.amountToLandlord;
+        require(bytes(l.moveOutCID).length > 0, "Landlord has not proposed a release yet");
 
-    l.state = LeaseState.RELEASED;
+        uint256 toLandlord = l.amountToLandlord + l.landlordStake;
+        uint256 toTenant = l.depositAmount - l.amountToLandlord;
 
-    emit LeaseReleased(leaseId, toLandlord, toTenant);
+        l.state = LeaseState.RELEASED;
 
-    require(usdc.transfer(l.landlord, toLandlord), "Landlord transfer failed");
-    require(usdc.transfer(l.tenant, toTenant), "Tenant transfer failed");
-}
+        emit LeaseReleased(leaseId, toLandlord, toTenant);
+
+        require(usdc.transfer(l.landlord, toLandlord), "Landlord transfer failed");
+        require(usdc.transfer(l.tenant, toTenant), "Tenant transfer failed");
+    }
 
     // ========== SCENARIO B: TIMEOUT REFUND ==========
 
     function timeoutRefund(uint256 leaseId)
         external
+        onlyTenant(leaseId)
         inState(leaseId, LeaseState.LOCKED)
         nonReentrant
     {

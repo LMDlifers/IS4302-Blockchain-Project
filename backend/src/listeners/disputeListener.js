@@ -1,8 +1,21 @@
+const { writeFileSync, readFileSync, existsSync } = require("fs");
 const { escrow } = require("../provider");
 const { fetchFromIPFS, uploadToIPFS } = require("../services/ipfsService");
 const { analyzeDispute } = require("../services/llmService");
 
-const CONFIDENCE_THRESHOLD = parseFloat(process.env.LLM_CONFIDENCE_THRESHOLD || "0.80");
+const rawThreshold = parseFloat(process.env.LLM_CONFIDENCE_THRESHOLD);
+const CONFIDENCE_THRESHOLD = isNaN(rawThreshold) ? 0.80 : rawThreshold;
+
+const PENDING_REVIEWS_FILE = "./pending_reviews.json";
+const pendingHumanReviews = new Map(
+  existsSync(PENDING_REVIEWS_FILE)
+    ? JSON.parse(readFileSync(PENDING_REVIEWS_FILE, "utf8"))
+    : []
+);
+
+function savePendingReviews() {
+  writeFileSync(PENDING_REVIEWS_FILE, JSON.stringify([...pendingHumanReviews]));
+}
 
 async function startDisputeListener() {
   console.log("[Listener] Watching for DisputeRaised events...");
@@ -11,7 +24,7 @@ async function startDisputeListener() {
     console.log(`\n[Dispute] Lease #${leaseId} disputed. Verifier: ${verifier}`);
 
     try {
-      // 1. Fetch lease data from contract (now has moveInCID + moveOutCID)
+      // 1. Fetch lease data from contract
       const lease = await escrow.leases(leaseId);
 
       console.log(`[Dispute] Lease data:`, {
@@ -22,7 +35,7 @@ async function startDisputeListener() {
         moveOutCID: lease.moveOutCID,
       });
 
-      // 2. Fetch move-in metadata from IPFS (uploaded at lease creation)
+      // 2. Fetch move-in metadata from IPFS
       let moveInData = {};
       if (lease.moveInCID) {
         try {
@@ -33,7 +46,7 @@ async function startDisputeListener() {
         }
       }
 
-      // 3. Fetch move-out / damage claim metadata from IPFS (uploaded by landlord at proposeRelease)
+      // 3. Fetch move-out / damage claim metadata from IPFS
       let moveOutData = {};
       if (lease.moveOutCID) {
         try {
@@ -50,8 +63,8 @@ async function startDisputeListener() {
       console.log(`[LLM] Running dispute analysis with photo comparison...`);
       const verdict = await analyzeDispute({
         leaseTerms: moveInData.leaseTerms || {},
-        moveInPhotoCIDs: moveInData.moveInPhotoCIDs || [],    // array of image CIDs from move-in
-        moveOutPhotoCIDs: moveOutData.moveOutPhotoCIDs || [], // array of damage photo CIDs
+        moveInPhotoCIDs: moveInData.moveInPhotoCIDs || [],
+        moveOutPhotoCIDs: moveOutData.moveOutPhotoCIDs || [],
         landlordClaim: moveOutData.landlordClaim || "Landlord claims deposit deduction for damages.",
         tenantClaim: moveInData.tenantClaim || "Tenant disputes the damage claim.",
         depositAmount: lease.depositAmount.toString(),
@@ -60,8 +73,9 @@ async function startDisputeListener() {
       console.log(`[LLM] Verdict:`, verdict);
 
       // 5. Store verdict on IPFS for audit trail
+      let verdictCID = null;
       try {
-        const verdictCID = await uploadToIPFS(
+        verdictCID = await uploadToIPFS(
           {
             ...verdict,
             leaseId: leaseId.toString(),
@@ -76,11 +90,29 @@ async function startDisputeListener() {
         console.warn(`[IPFS] Failed to store verdict: ${err.message}`);
       }
 
-      // 6. Check confidence threshold
+      // 6. Check confidence threshold — escalate to human review if below
       if (verdict.confidence < CONFIDENCE_THRESHOLD) {
         console.warn(
-          `[Escalate] Lease #${leaseId} — confidence ${verdict.confidence} below threshold (${CONFIDENCE_THRESHOLD}). Manual review needed.`
+          `[Escalate] Lease #${leaseId} — confidence ${verdict.confidence} below threshold (${CONFIDENCE_THRESHOLD}). Escalating to human review.`
         );
+        const review = {
+          leaseId: leaseId.toString(),
+          landlord: lease.landlord,
+          tenant: lease.tenant,
+          depositAmount: lease.depositAmount.toString(),
+          verdictCID,
+          llmSuggestion: {
+            amountToLandlord: verdict.amountToLandlord,
+            confidence: verdict.confidence,
+            reasoning: verdict.reasoning,
+          },
+          moveInCID: lease.moveInCID,
+          moveOutCID: lease.moveOutCID,
+          escalatedAt: new Date().toISOString(),
+          status: "pending",
+        };
+        pendingHumanReviews.set(leaseId.toString(), review);
+        savePendingReviews();
         return;
       }
 
@@ -103,4 +135,4 @@ async function startDisputeListener() {
   });
 }
 
-module.exports = { startDisputeListener };
+module.exports = { startDisputeListener, pendingHumanReviews, savePendingReviews };

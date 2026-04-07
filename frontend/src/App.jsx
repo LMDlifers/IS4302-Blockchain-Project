@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAccount, useConnect, useDisconnect, usePublicClient } from "wagmi";
+import { useAccount, useConnect, useDisconnect, usePublicClient, useChainId } from "wagmi";
 import { injected } from "wagmi/connectors";
 import {
   useInitializeLease,
@@ -9,6 +9,7 @@ import {
   useAcceptRelease,
   useRaiseDispute,
   useResolveDispute,
+  useTimeoutRefund,
   useLease,
   useUSDCBalance,
 } from "./hooks/useEscrow";
@@ -27,6 +28,7 @@ const COLORS = {
   blue: "#3B82F6",
   orange: "#F59E0B",
   red: "#EF4444",
+  green: "#22C55E",
   textPrimary: "#F1F5F9",
   textSecondary: "#94A3B8",
   textMuted: "#475569",
@@ -204,7 +206,24 @@ const css = `
     border: 1px solid rgba(59,130,246,0.2);
     color: ${COLORS.blue};
   }
+
+  .nav-tab {
+    border: 1px solid ${COLORS.border};
+    border-radius: 8px;
+    padding: 8px 18px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .nav-tab:hover { border-color: ${COLORS.borderHover}; }
 `;
+
+// Inject styles once at module load (avoids duplicate tags on every mount)
+const _style = document.createElement("style");
+_style.textContent = css;
+document.head.appendChild(_style);
 
 // ========== NAVBAR COMPONENT ==========
 function Navbar() {
@@ -213,19 +232,14 @@ function Navbar() {
   const { disconnect } = useDisconnect();
 
   const handleConnect = async () => {
-    console.log("Connectors available:", connectors);
     if (isConnected) {
       disconnect();
     } else {
       if (connectors.length > 0) {
-        // Find the injected connector which is most reliable for MetaMask/Opera
         const connector = connectors.find(c => c.id === 'injected') || connectors[0];
-        console.log("Attempting connection with:", connector.id);
-        
         try {
           await connect({ connector });
         } catch (err) {
-          console.error("Connection failed:", err);
           alert(`Connection failed: ${err.message}\n\nTroubleshooting:\n1. Ensure MetaMask is UNLOCKED.\n2. In MetaMask, check 'Connected Sites' for localhost.\n3. If using Opera, disable Opera's built-in wallet in settings.`);
         }
       } else {
@@ -312,10 +326,11 @@ function CreateEscrow({ onSuccess }) {
     const gracePeriod = parseInt(formData.gracePeriodDays) * 24 * 60 * 60;
     const depositAmount = parseFloat(formData.depositAmount);
     const stakeAmount = depositAmount / 5;
+    const stakeAmountRaw = BigInt(Math.round(stakeAmount * 1_000_000));
 
     try {
       setSuccess("Step 1 of 2: Approving USDC stake... (confirm in MetaMask)");
-      const approveTxHash = await approveStake(stakeAmount);
+      const approveTxHash = await approveStake(stakeAmountRaw);
       setSuccess("Step 1 of 2: Waiting for approval confirmation...");
       await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
 
@@ -478,6 +493,7 @@ function EscrowDetail({ leaseId, onBack }) {
   const { propose, isLoading: proposing } = useProposeRelease();
   const { accept, isLoading: accepting } = useAcceptRelease();
   const { raise, isLoading: raising } = useRaiseDispute();
+  const { refund, isLoading: refunding } = useTimeoutRefund();
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   
@@ -695,6 +711,57 @@ function EscrowDetail({ leaseId, onBack }) {
         </div>
       )}
 
+      {/* ACTION 4: DISPUTED state — show status and verifier */}
+      {stateIndex === 2 && (
+        <div className="card" style={{ marginBottom: "20px", background: `${COLORS.red}15`, border: `1px solid ${COLORS.red}30` }}>
+          <h3 style={{ marginBottom: "12px", color: COLORS.red }}>Dispute In Progress</h3>
+          <p style={{ fontSize: "14px", marginBottom: "12px", color: COLORS.textSecondary }}>
+            This lease is under dispute. The assigned verifier (or LLM judge) is reviewing the evidence.
+          </p>
+          <div style={{ padding: "12px", background: "rgba(0,0,0,0.2)", borderRadius: "8px", fontSize: "13px" }}>
+            <span style={{ color: COLORS.textSecondary }}>Verifier: </span>
+            <span className="mono">{verifierRaw || "Unassigned"}</span>
+          </div>
+          {verifierRaw && verifierRaw !== "0x0000000000000000000000000000000000000000" && (
+            <p style={{ marginTop: "12px", fontSize: "13px", color: COLORS.textMuted }}>
+              If the LLM confidence is below threshold, a human verifier will submit a verdict via the Verifier Panel.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ACTION 5: Timeout refund — shown to tenant when deadline + grace period has passed */}
+      {isTenant && stateIndex === 1 && (
+        (() => {
+          const deadlineTs = Number(deadlineRaw || 0);
+          const gracePeriodSecs = Number(gracePeriodRaw || 0);
+          const now = Math.floor(Date.now() / 1000);
+          if (now <= deadlineTs + gracePeriodSecs) return null;
+          return (
+            <div className="card" style={{ marginBottom: "20px", background: `${COLORS.textSecondary}10` }}>
+              <h3 style={{ marginBottom: "12px" }}>Timeout Refund Available</h3>
+              <p style={{ fontSize: "14px", marginBottom: "16px", color: COLORS.textSecondary }}>
+                The lease deadline and grace period have expired. You can reclaim your full deposit. The landlord's stake will be slashed.
+              </p>
+              <button
+                className="btn-primary"
+                onClick={async () => {
+                  try {
+                    await refund(BigInt(leaseId));
+                    setSuccess("✓ Refund triggered. Full deposit returned.");
+                    setTimeout(() => refetch(), 2000);
+                  } catch (err) { setError(`Refund failed: ${err.message}`); }
+                }}
+                disabled={refunding}
+                style={{ background: COLORS.textSecondary }}
+              >
+                {refunding ? <span className="spinner"></span> : "Trigger Timeout Refund"}
+              </button>
+            </div>
+          );
+        })()
+      )}
+
       {/* 2-COLUMN IMAGE GALLERY */}
       {(moveInCIDRaw !== "" || moveOutCIDRaw !== "") && (
         <div className="card" style={{ marginTop: "20px" }}>
@@ -740,9 +807,140 @@ function EscrowDetail({ leaseId, onBack }) {
   );
 }
 
+// ========== VERIFIER PANEL COMPONENT ==========
+function VerifierPanel() {
+  const [pendingDisputes, setPendingDisputes] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [verdicts, setVerdicts] = useState({});
+  const [adminSecret, setAdminSecret] = useState("");
+  const [submitting, setSubmitting] = useState(null);
+  const [result, setResult] = useState("");
+
+  const fetchPending = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("http://localhost:3001/api/disputes/pending");
+      const data = await res.json();
+      setPendingDisputes(data.disputes || []);
+    } catch (err) {
+      setError("Could not reach backend: " + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchPending(); }, []);
+
+  const handleResolve = async (leaseId) => {
+    const amount = verdicts[leaseId];
+    if (!amount && amount !== 0) { setResult("Enter an amount for lease #" + leaseId); return; }
+    setSubmitting(leaseId);
+    setResult("");
+    try {
+      const res = await fetch(`http://localhost:3001/api/disputes/${leaseId}/human-resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-secret": adminSecret },
+        body: JSON.stringify({ amountToLandlord: Math.round(parseFloat(amount) * 1_000_000) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setResult(`✓ Lease #${leaseId} resolved. Tx: ${data.txHash}`);
+      fetchPending();
+    } catch (err) {
+      setResult(`✗ ${err.message}`);
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  return (
+    <div style={{ padding: "40px", maxWidth: "800px" }}>
+      <h2 style={{ marginBottom: "8px" }}>Verifier Panel</h2>
+      <p style={{ color: COLORS.textSecondary, marginBottom: "24px", fontSize: "14px" }}>
+        Disputes escalated for human review (LLM confidence below threshold).
+      </p>
+
+      {error && <div className="alert alert-error">{error}</div>}
+      {result && <div className={`alert ${result.startsWith("✓") ? "alert-success" : "alert-error"}`}>{result}</div>}
+
+      <div style={{ marginBottom: "20px" }}>
+        <input
+          className="input-field"
+          type="password"
+          placeholder="Admin secret (ADMIN_SECRET env var)"
+          value={adminSecret}
+          onChange={(e) => setAdminSecret(e.target.value)}
+          style={{ maxWidth: "360px" }}
+        />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+        <h3>{loading ? "Loading..." : `${pendingDisputes.length} pending dispute(s)`}</h3>
+        <button className="btn-ghost btn-sm" onClick={fetchPending}>Refresh</button>
+      </div>
+
+      {pendingDisputes.length === 0 && !loading && (
+        <div className="card" style={{ textAlign: "center", padding: "40px" }}>
+          <p style={{ color: COLORS.textSecondary }}>No disputes awaiting human review.</p>
+        </div>
+      )}
+
+      {pendingDisputes.map((d) => (
+        <div key={d.leaseId} className="card" style={{ marginBottom: "16px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px" }}>
+            <h4>Lease #{d.leaseId}</h4>
+            <span className="status-badge status-disputed">Pending Review</span>
+          </div>
+
+          <div style={{ fontSize: "13px", marginBottom: "12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+            <div><span style={{ color: COLORS.textSecondary }}>Deposit: </span>{(Number(d.depositAmount) / 1_000_000).toFixed(2)} USDC</div>
+            <div><span style={{ color: COLORS.textSecondary }}>LLM Confidence: </span>{(d.llmSuggestion.confidence * 100).toFixed(0)}%</div>
+            <div><span style={{ color: COLORS.textSecondary }}>LLM Suggests: </span>{(d.llmSuggestion.amountToLandlord / 1_000_000).toFixed(2)} USDC to landlord</div>
+            <div><span style={{ color: COLORS.textSecondary }}>Escalated: </span>{new Date(d.escalatedAt).toLocaleString()}</div>
+          </div>
+
+          {d.llmSuggestion.reasoning && (
+            <div style={{ padding: "10px", background: COLORS.surface, borderRadius: "6px", fontSize: "12px", color: COLORS.textSecondary, marginBottom: "12px" }}>
+              <strong>LLM Reasoning:</strong> {d.llmSuggestion.reasoning}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+            {d.moveInCID && <a href={`https://gateway.pinata.cloud/ipfs/${d.moveInCID}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: "12px", color: COLORS.blue }}>View Move-in Evidence</a>}
+            {d.moveOutCID && <a href={`https://gateway.pinata.cloud/ipfs/${d.moveOutCID}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: "12px", color: COLORS.orange }}>View Damage Evidence</a>}
+            {d.verdictCID && <a href={`https://gateway.pinata.cloud/ipfs/${d.verdictCID}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: "12px", color: COLORS.textMuted }}>View LLM Verdict CID</a>}
+          </div>
+
+          <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+            <input
+              className="input-field"
+              type="number"
+              placeholder={`Amount to landlord (USDC), LLM suggests ${(d.llmSuggestion.amountToLandlord / 1_000_000).toFixed(2)}`}
+              value={verdicts[d.leaseId] ?? ""}
+              onChange={(e) => setVerdicts(prev => ({ ...prev, [d.leaseId]: e.target.value }))}
+              style={{ flex: 1 }}
+            />
+            <button
+              className="btn-primary"
+              onClick={() => handleResolve(d.leaseId)}
+              disabled={submitting === d.leaseId}
+              style={{ whiteSpace: "nowrap" }}
+            >
+              {submitting === d.leaseId ? <span className="spinner"></span> : "Submit Verdict"}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ========== DASHBOARD COMPONENT ==========
 function Dashboard() {
   const { address, isConnected } = useAccount();
+  const chainId = useChainId();
   const [activeTab, setActiveTab] = useState("overview");
   const [selectedLeaseId, setSelectedLeaseId] = useState(null);
   const [myLeases, setMyLeases] = useState([]);
@@ -809,6 +1007,10 @@ function Dashboard() {
     return <CreateEscrow onSuccess={() => setActiveTab("escrows")} />;
   }
 
+  if (activeTab === "verifier") {
+    return <VerifierPanel />;
+  }
+
   return (
     <div style={{ padding: "40px" }}>
       <h2 style={{ marginBottom: "30px" }}>Dashboard</h2>
@@ -844,6 +1046,16 @@ function Dashboard() {
         >
           Create New
         </button>
+        <button
+          className={`nav-tab ${activeTab === "verifier" ? "active" : ""}`}
+          onClick={() => setActiveTab("verifier")}
+          style={{
+            background: activeTab === "verifier" ? COLORS.orange : "transparent",
+            color: activeTab === "verifier" ? "#000" : COLORS.textSecondary,
+          }}
+        >
+          Verifier
+        </button>
       </div>
 
       {activeTab === "overview" && (
@@ -860,7 +1072,9 @@ function Dashboard() {
           </div>
           <div className="card">
             <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "8px" }}>Network</p>
-            <p style={{ fontSize: "32px", fontWeight: "700" }}>Hardhat</p>
+            <p style={{ fontSize: "24px", fontWeight: "700" }}>
+              {chainId === 1337 ? "Hardhat" : chainId === 11155111 ? "Sepolia" : `Chain ${chainId}`}
+            </p>
           </div>
         </div>
       )}
@@ -997,12 +1211,6 @@ function Dashboard() {
 
 // ========== MAIN APP ==========
 export default function App() {
-  useEffect(() => {
-    const style = document.createElement("style");
-    style.textContent = css;
-    document.head.appendChild(style);
-  }, []);
-
   return (
     <div style={{ background: COLORS.bg, minHeight: "100vh", color: COLORS.textPrimary }}>
       <Navbar />

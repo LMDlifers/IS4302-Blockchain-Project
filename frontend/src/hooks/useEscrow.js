@@ -31,13 +31,13 @@ export function useLease(leaseId) {
 export function useApproveUSDC() {
   const { writeContractAsync } = useWriteContract();
 
-  const approve = (amount, options = {}) => {
-    const parsedAmount = parseUnits(String(amount), 6);
+  const approve = (rawAmount, options = {}) => {
+    // rawAmount must already be in 6-decimal raw units (e.g. 1000000n for 1 USDC)
     return writeContractAsync({
       address: USDC_ADDRESS,
       abi: USDC_ABI,
       functionName: "approve",
-      args: [ESCROW_ADDRESS, parsedAmount],
+      args: [ESCROW_ADDRESS, BigInt(rawAmount)],
       gas: 3000000n,
       ...options,
     });
@@ -121,11 +121,11 @@ export function useProposeRelease() {
  * Triggers fund transfers and moves lease to RELEASED state
  */
 export function useAcceptRelease() {
-  const { writeContract, data: hash } = useWriteContract();
+  const { writeContractAsync, data: hash } = useWriteContract();
   const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
 
   const accept = (leaseId, options = {}) => {
-    return writeContract({
+    return writeContractAsync({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "acceptRelease",
@@ -143,11 +143,11 @@ export function useAcceptRelease() {
  * Randomly assigns a verifier and moves lease to DISPUTED state
  */
 export function useRaiseDispute() {
-  const { writeContract, data: hash } = useWriteContract();
+  const { writeContractAsync, data: hash } = useWriteContract();
   const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
 
   const raise = (leaseId, options = {}) => {
-    return writeContract({
+    return writeContractAsync({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "raiseDispute",
@@ -165,16 +165,17 @@ export function useRaiseDispute() {
  * Only callable by the assigned verifier
  */
 export function useResolveDispute() {
-  const { writeContract, data: hash } = useWriteContract();
+  const { writeContractAsync, data: hash } = useWriteContract();
   const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
 
   const resolve = (leaseId, amountToLandlord) => {
     const parsedAmount = parseUnits(String(amountToLandlord), 6);
-    return writeContract({
+    return writeContractAsync({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "resolveDispute",
       args: [leaseId, parsedAmount],
+      gas: 3000000n,
     });
   };
 
@@ -186,15 +187,16 @@ export function useResolveDispute() {
  * Anyone can call after deadline + grace period expires
  */
 export function useTimeoutRefund() {
-  const { writeContract, data: hash } = useWriteContract();
+  const { writeContractAsync, data: hash } = useWriteContract();
   const { isLoading, isSuccess } = useWaitForTransactionReceipt({ hash });
 
   const refund = (leaseId) => {
-    return writeContract({
+    return writeContractAsync({
       address: ESCROW_ADDRESS,
       abi: ESCROW_ABI,
       functionName: "timeoutRefund",
       args: [leaseId],
+      gas: 3000000n,
     });
   };
 

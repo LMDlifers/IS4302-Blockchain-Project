@@ -59,7 +59,7 @@ describe("EscrowManager", function () {
       expect(lease.depositAmount).to.equal(DEPOSIT);
       expect(lease.landlordStake).to.equal(STAKE);
       expect(lease.state).to.equal(0); // CREATED
-      expect(lease.ipfsCID).to.equal("QmTestCID123");
+      expect(lease.moveInCID).to.equal("QmTestCID123");
     });
 
     it("Should transfer stake from landlord to contract", async function () {
@@ -116,7 +116,7 @@ describe("EscrowManager", function () {
     it("Landlord should be able to propose a release split", async function () {
       const amountToLandlord = ethers.parseUnits("200", 6); // Keep 200 USDC (20%)
 
-      await escrow.connect(landlord).proposeRelease(1, amountToLandlord);
+      await escrow.connect(landlord).proposeRelease(1, amountToLandlord, "QmMoveOutCID");
 
       const lease = await escrow.leases(1);
       expect(lease.amountToLandlord).to.equal(amountToLandlord);
@@ -124,7 +124,7 @@ describe("EscrowManager", function () {
 
     it("Tenant should be able to accept release and funds should transfer", async function () {
       const amountToLandlord = ethers.parseUnits("200", 6);
-      await escrow.connect(landlord).proposeRelease(1, amountToLandlord);
+      await escrow.connect(landlord).proposeRelease(1, amountToLandlord, "QmMoveOutCID");
 
       const landlordBalanceBefore = await usdc.balanceOf(landlord.address);
       const tenantBalanceBefore = await usdc.balanceOf(tenant.address);
@@ -146,7 +146,7 @@ describe("EscrowManager", function () {
 
     it("Should emit LeaseReleased event", async function () {
       const amountToLandlord = ethers.parseUnits("200", 6);
-      await escrow.connect(landlord).proposeRelease(1, amountToLandlord);
+      await escrow.connect(landlord).proposeRelease(1, amountToLandlord, "QmMoveOutCID");
 
       await expect(escrow.connect(tenant).acceptRelease(1))
         .to.emit(escrow, "LeaseReleased")
@@ -187,7 +187,7 @@ describe("EscrowManager", function () {
       const tenantBalanceBefore = await usdc.balanceOf(tenant.address);
       const feeAddressBalanceBefore = await usdc.balanceOf(landlord.address); // feeAddress is landlord in test
 
-      await escrow.connect(other).timeoutRefund(1);
+      await escrow.connect(tenant).timeoutRefund(1);
 
       const tenantBalanceAfter = await usdc.balanceOf(tenant.address);
       const feeAddressBalanceAfter = await usdc.balanceOf(landlord.address);
@@ -208,7 +208,7 @@ describe("EscrowManager", function () {
 
       await time.increase(deadline + gracePeriod + 1000);
 
-      await expect(escrow.connect(other).timeoutRefund(1))
+      await expect(escrow.connect(tenant).timeoutRefund(1))
         .to.emit(escrow, "LeaseRefunded")
         .withArgs(1, DEPOSIT);
     });
@@ -339,7 +339,7 @@ describe("EscrowManager", function () {
         "QmTestCID123"
       );
       await escrow.connect(tenant).depositFunds(1);
-      await escrow.connect(landlord).proposeRelease(1, ethers.parseUnits("200", 6));
+      await escrow.connect(landlord).proposeRelease(1, ethers.parseUnits("200", 6), "QmMoveOutCID");
 
       // Normal call should work
       await expect(escrow.connect(tenant).acceptRelease(1))
