@@ -28,6 +28,13 @@ export const ESCROW_ABI = [
   { inputs: [{ internalType: "uint256", name: "leaseId", type: "uint256" }], name: "raiseDispute", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ internalType: "uint256", name: "leaseId", type: "uint256" }, { internalType: "uint256", name: "amountToLandlord", type: "uint256" }], name: "resolveDispute", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ internalType: "uint256", name: "leaseId", type: "uint256" }], name: "timeoutRefund", outputs: [], stateMutability: "nonpayable", type: "function" },
+
+  // --- NEW AI FUNCTIONS (Converted to JSON format) ---
+  { inputs: [{ internalType: "uint256", name: "", type: "uint256" }], name: "aiVerdictCIDs", outputs: [{ internalType: "string", name: "", type: "string" }], stateMutability: "view", type: "function" },
+  { inputs: [{ internalType: "uint256", name: "", type: "uint256" }], name: "tenantAgreedAI", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "view", type: "function" },
+  { inputs: [{ internalType: "uint256", name: "", type: "uint256" }], name: "landlordAgreedAI", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "view", type: "function" },
+  { inputs: [{ internalType: "uint256", name: "leaseId", type: "uint256" }], name: "acceptAIVerdict", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ internalType: "uint256", name: "leaseId", type: "uint256" }], name: "escalateToHuman", outputs: [], stateMutability: "nonpayable", type: "function" }
 ];
 
 export const USDC_ABI = [

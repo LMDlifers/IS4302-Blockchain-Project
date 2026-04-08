@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useAccount, useConnect, useDisconnect, usePublicClient } from "wagmi";
 import { injected } from "wagmi/connectors";
+import AIVerdict from "./components/AIVerdict";
 import {
   useInitializeLease,
   useApproveUSDC,
@@ -731,11 +732,19 @@ function EscrowDetail({ leaseId, onBack }) {
                   </div>
                 ) : <p style={{ fontSize: "12px", color: COLORS.textSecondary }}>No damage photos found.</p>}
               </div>
-
             </div>
           )}
         </div>
       )}
+        <div>
+                {/* Assuming state 2 means DISPUTED */}
+                {Number(stateIndex) === 2 && (
+                  <AIVerdict 
+                    leaseId={leaseId} 
+                    escrowDetails={lease} 
+                  />
+                )}
+        </div>
     </div>
   );
 }

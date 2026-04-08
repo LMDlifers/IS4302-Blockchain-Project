@@ -69,8 +69,8 @@ async function analyzeDispute(evidence) {
     } = evidence;
 
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-    // Use gemini-1.5-pro for vision/multimodal support
-    const model = "gemini-1.5-pro";
+
+    const model = "gemini-2.5-flash-lite";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 
     console.log(`[GEMINI] Building multimodal prompt with ${moveInPhotoCIDs.length} move-in and ${moveOutPhotoCIDs.length} move-out photos...`);

@@ -21,6 +21,9 @@ export function useLease(leaseId) {
     abi: ESCROW_ABI,
     functionName: "leases",
     args: [leaseId],
+    query: { 
+    refetchInterval: 1000 // <--- THIS is the magic line. It refetches every 1 second!
+  } 
   });
 }
 

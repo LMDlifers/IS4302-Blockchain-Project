@@ -242,4 +242,62 @@ contract EscrowManager is ReentrancyGuard, Ownable {
         require(usdc.transfer(l.landlord, toLandlord), "Landlord transfer failed");
         require(usdc.transfer(l.tenant, toTenant), "Tenant transfer failed");
     }
+
+        // --- NEW: AI ARBITRATION TRACKING ---
+    mapping(uint256 => string) public aiVerdictCIDs;
+    mapping(uint256 => bool) public tenantAgreedAI;
+    mapping(uint256 => bool) public landlordAgreedAI;
+
+    event AIVerdictSubmitted(uint256 leaseId, uint256 amountToLandlord, string verdictCID);
+    event HumanEscalationRequested(uint256 leaseId, address requestedBy);
+
+    // 1. AI calls this to propose a resolution (does NOT transfer funds yet)
+    function submitAIVerdict(uint256 leaseId, uint256 amountToLandlord, string calldata verdictCID)
+        external
+        onlyVerifier(leaseId)
+        inState(leaseId, LeaseState.DISPUTED)
+    {
+        Lease storage l = leases[leaseId];
+        require(amountToLandlord <= l.depositAmount, "Exceeds deposit");
+        l.amountToLandlord = amountToLandlord;
+        aiVerdictCIDs[leaseId] = verdictCID;
+        
+        emit AIVerdictSubmitted(leaseId, amountToLandlord, verdictCID);
+    }
+
+    // 2. Tenant and Landlord call this to agree to the AI's split
+    function acceptAIVerdict(uint256 leaseId)
+        external
+        inState(leaseId, LeaseState.DISPUTED)
+        nonReentrant
+    {
+        Lease storage l = leases[leaseId];
+        require(msg.sender == l.tenant || msg.sender == l.landlord, "Not party");
+        require(bytes(aiVerdictCIDs[leaseId]).length > 0, "No AI verdict yet");
+
+        if (msg.sender == l.tenant) tenantAgreedAI[leaseId] = true;
+        if (msg.sender == l.landlord) landlordAgreedAI[leaseId] = true;
+
+        // If BOTH have agreed, automatically resolve and transfer funds!
+        if (tenantAgreedAI[leaseId] && landlordAgreedAI[leaseId]) {
+            uint256 toLandlord = l.amountToLandlord + l.landlordStake;
+            uint256 toTenant = l.depositAmount - l.amountToLandlord;
+            
+            l.state = LeaseState.RELEASED;
+            emit DisputeResolved(leaseId, toLandlord, toTenant);
+            
+            require(usdc.transfer(l.landlord, toLandlord), "Landlord transfer failed");
+            require(usdc.transfer(l.tenant, toTenant), "Tenant transfer failed");
+        }
+    }
+
+    // 3. If a party hates the AI's verdict, they click "Escalate"
+    function escalateToHuman(uint256 leaseId)
+        external
+        inState(leaseId, LeaseState.DISPUTED)
+    {
+        Lease storage l = leases[leaseId];
+        require(msg.sender == l.tenant || msg.sender == l.landlord, "Not party");
+        emit HumanEscalationRequested(leaseId, msg.sender);
+    }
 }
