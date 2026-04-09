@@ -9,7 +9,7 @@ const wsUrl = rpcUrl.replace("http://", "ws://").replace("https://", "wss://");
 console.log(`🔌 Connecting to Blockchain via WebSocket: ${wsUrl}`);
 
 const provider = new ethers.WebSocketProvider(wsUrl);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+const wallet = new ethers.Wallet(process.env.BACKEND_WALLET_PRIVATE_KEY, provider);
 const escrow = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, wallet);
 
 provider.websocket.on("close", (code) => {

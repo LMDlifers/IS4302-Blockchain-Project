@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAccount, useConnect, useDisconnect, usePublicClient } from "wagmi";
+import { useAccount, useConnect, useDisconnect, usePublicClient, useChainId } from "wagmi";
 import { injected } from "wagmi/connectors";
 import AIVerdict from "./components/AIVerdict";
 import {
@@ -10,6 +10,7 @@ import {
   useAcceptRelease,
   useRaiseDispute,
   useResolveDispute,
+  useTimeoutRefund,
   useLease,
   useUSDCBalance,
 } from "./hooks/useEscrow";
@@ -25,6 +26,7 @@ const COLORS = {
   accentDim: "#00CC6A",
   accentGlow: "rgba(0,255,135,0.15)",
   accentGlow2: "rgba(0,255,135,0.06)",
+  green: "#00FF87", // Fix 4.1: was missing — caused Accept button to be invisible
   blue: "#3B82F6",
   orange: "#F59E0B",
   red: "#EF4444",
@@ -212,22 +214,24 @@ function Navbar() {
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
+  const chainId = useChainId();
+  const wrongChain = isConnected && chainId !== 1337;
 
   const handleConnect = async () => {
-    console.log("Connectors available:", connectors);
     if (isConnected) {
       disconnect();
     } else {
       if (connectors.length > 0) {
-        // Find the injected connector which is most reliable for MetaMask/Opera
         const connector = connectors.find(c => c.id === 'injected') || connectors[0];
-        console.log("Attempting connection with:", connector.id);
-        
         try {
           await connect({ connector });
         } catch (err) {
-          console.error("Connection failed:", err);
-          alert(`Connection failed: ${err.message}\n\nTroubleshooting:\n1. Ensure MetaMask is UNLOCKED.\n2. In MetaMask, check 'Connected Sites' for localhost.\n3. If using Opera, disable Opera's built-in wallet in settings.`);
+          if (err.message?.includes('chain') || err.name === 'ChainNotConfiguredError') {
+            alert("Wrong network detected. Switch MetaMask to Hardhat (Chain ID: 1337, RPC: http://127.0.0.1:8545).");
+          } else {
+            console.error("Connection failed:", err);
+            alert(`Connection failed: ${err.message}\n\nTroubleshooting:\n1. Ensure MetaMask is UNLOCKED.\n2. In MetaMask, check 'Connected Sites' for localhost.\n3. If using Opera, disable Opera's built-in wallet in settings.`);
+          }
         }
       } else {
         alert("No web3 wallet detected. Please install MetaMask!");
@@ -236,18 +240,35 @@ function Navbar() {
   };
 
   return (
-    <div style={{ padding: "20px 40px", borderBottom: `1px solid ${COLORS.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-      <div style={{ fontSize: "20px", fontWeight: "700", letterSpacing: "-0.02em" }}>
-        🔒 RentLock
+    <>
+      <div style={{ padding: "20px 40px", borderBottom: `1px solid ${COLORS.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontSize: "20px", fontWeight: "700", letterSpacing: "-0.02em" }}>
+          🔒 RentLock
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {isConnected && (
+            <button
+              style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.textSecondary, padding: "6px 12px", borderRadius: "6px", fontSize: "12px", cursor: "pointer" }}
+              onClick={() => disconnect()}
+            >
+              Disconnect
+            </button>
+          )}
+          <button
+            className="btn-primary btn-sm"
+            onClick={handleConnect}
+            style={{ cursor: "pointer" }}
+          >
+            {isConnected ? `${address?.slice(0, 6)}...${address?.slice(-4)}` : "Connect Wallet"}
+          </button>
+        </div>
       </div>
-      <button
-        className="btn-primary btn-sm"
-        onClick={handleConnect}
-        style={{ cursor: "pointer" }}
-      >
-        {isConnected ? `${address?.slice(0, 6)}...${address?.slice(-4)}` : "Connect Wallet"}
-      </button>
-    </div>
+      {wrongChain && (
+        <div style={{ background: COLORS.orange, color: "#000", padding: "8px 16px", textAlign: "center", fontSize: "13px", fontWeight: "600" }}>
+          Wrong network — switch MetaMask to Hardhat (Chain ID: 1337, RPC: http://127.0.0.1:8545)
+        </div>
+      )}
+    </>
   );
 }
 
@@ -304,12 +325,13 @@ function CreateEscrow({ onSuccess }) {
   };
 
   const handleCreateLease = async () => {
-    if (!formData.tenantAddress || !formData.depositAmount || !formData.moveInCID) {
+    if (!formData.tenantAddress || !formData.depositAmount || !formData.deadline || !formData.moveInCID) {
       setError("Please fill all fields and upload move-in photos");
       return;
     }
 
     const deadline = Math.floor(new Date(formData.deadline).getTime() / 1000);
+    if (isNaN(deadline)) { setError("Invalid lease deadline date"); return; }
     const gracePeriod = parseInt(formData.gracePeriodDays) * 24 * 60 * 60;
     const depositAmount = parseFloat(formData.depositAmount);
     const stakeAmount = depositAmount / 5;
@@ -447,7 +469,7 @@ function CreateEscrow({ onSuccess }) {
               <span>Deposit:</span><span>{formData.depositAmount} USDC</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-              <span>Your Stake:</span><span>{(formData.depositAmount / 5).toFixed(2)} USDC (20%)</span>
+              <span>Your Stake:</span><span>{(parseFloat(formData.depositAmount) / 5 || 0).toFixed(2)} USDC (20%)</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
               <span>Grace Period:</span><span>{formData.gracePeriodDays} days</span>
@@ -474,14 +496,16 @@ function CreateEscrow({ onSuccess }) {
 function EscrowDetail({ leaseId, onBack }) {
   const { address } = useAccount();
   const { data: lease, refetch, isError, isLoading } = useLease(BigInt(leaseId));
-  const { approve, isLoading: approving } = useApproveUSDC();
-  const { deposit, isLoading: depositing } = useDepositFunds();
-  const { propose, isLoading: proposing } = useProposeRelease();
-  const { accept, isLoading: accepting } = useAcceptRelease();
-  const { raise, isLoading: raising } = useRaiseDispute();
+  const { approve } = useApproveUSDC();
+  const { deposit } = useDepositFunds();
+  const { propose } = useProposeRelease();
+  const { accept } = useAcceptRelease();
+  const { raise } = useRaiseDispute();
+  const { refund } = useTimeoutRefund(); // Fix 4.5: was imported but unused
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  
+  const [txPending, setTxPending] = useState(false);
+
   // Input states
   const [proposedAmountInput, setProposedAmountInput] = useState("");
   const [damagePhotoCIDs, setDamagePhotoCIDs] = useState([]);
@@ -578,12 +602,16 @@ function EscrowDetail({ leaseId, onBack }) {
   // 6. Contract Write Actions
   const handleDeposit = async () => {
     try {
-      await approve(depositAmountRaw.toString());
+      setTxPending(true);
+      // Fix 4.2: pass human-readable amount (displayDeposit) so useApproveUSDC's
+      // parseUnits() call gives the correct 6-decimal value.
+      await approve(displayDeposit);
       setSuccess("✓ USDC approved. Now depositing...");
       await deposit(leaseId);
       setSuccess("✓ Funds deposited! Lease is now LOCKED");
       setTimeout(() => refetch(), 2000);
     } catch (err) { setError(`Deposit failed: ${err.message}`); }
+    finally { setTxPending(false); }
   };
 
   const handleDamagePhotoUpload = async (e) => {
@@ -609,6 +637,7 @@ function EscrowDetail({ leaseId, onBack }) {
   const handlePropose = async () => {
     if (!proposedAmountInput) { setError("Enter amount to propose"); return; }
     try {
+      setTxPending(true);
       let outCID = "QmDemoDamageMeta" + Math.floor(Math.random() * 9999);
       const res = await fetch("http://localhost:3001/api/ipfs/upload-metadata", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -619,11 +648,12 @@ function EscrowDetail({ leaseId, onBack }) {
         }),
       });
       if (res.ok) { const data = await res.json(); outCID = data.cid; }
-      
+
       await propose(leaseId, proposedAmountInput, outCID);
       setSuccess("✓ Release proposed. Waiting for tenant...");
       setTimeout(() => refetch(), 2000);
     } catch (err) { setError(`Proposal failed: ${err.message}`); }
+    finally { setTxPending(false); }
   };
 
   // 7. Render UI
@@ -654,8 +684,8 @@ function EscrowDetail({ leaseId, onBack }) {
         <div className="card" style={{ marginBottom: "20px", background: `${COLORS.blue}15` }}>
           <h3 style={{ marginBottom: "16px", color: COLORS.blue }}>Your Action Required</h3>
           <p style={{ marginBottom: "16px", fontSize: "14px" }}>Approve and deposit {displayDeposit.toFixed(2)} USDC to activate this lease.</p>
-          <button className="btn-primary" onClick={handleDeposit} disabled={approving || depositing}>
-            {approving || depositing ? <span className="spinner"></span> : null} Approve & Deposit USDC
+          <button className="btn-primary" onClick={handleDeposit} disabled={txPending}>
+            {txPending ? <span className="spinner"></span> : null} Approve & Deposit USDC
           </button>
         </div>
       )}
@@ -674,8 +704,25 @@ function EscrowDetail({ leaseId, onBack }) {
           <textarea className="input-field" placeholder="Describe the damage" value={damageDescription} onChange={(e) => setDamageDescription(e.target.value)} rows={2} style={{ marginBottom: "12px", resize: "vertical" }} />
           <div style={{ display: "flex", gap: "12px" }}>
             <input className="input-field" type="number" placeholder="Amount to keep (USDC)" value={proposedAmountInput} onChange={(e) => setProposedAmountInput(e.target.value)} style={{ flex: 1 }} />
-            <button className="btn-primary" onClick={handlePropose} disabled={proposing}>{proposing ? <span className="spinner"></span> : "Propose"}</button>
+            <button className="btn-primary" onClick={handlePropose} disabled={txPending}>{txPending ? <span className="spinner"></span> : "Propose"}</button>
           </div>
+        </div>
+      )}
+
+      {/* ACTION 2b: Tenant Timeout Refund — Fix 4.5: was never rendered */}
+      {isTenant && stateIndex === 1 && deadlineRaw && Number(deadlineRaw) + Number(gracePeriodRaw) < Math.floor(Date.now() / 1000) && (
+        <div className="card" style={{ marginBottom: "20px", background: `${COLORS.orange}15` }}>
+          <h3 style={{ marginBottom: "8px", color: COLORS.orange }}>Claim Timeout Refund</h3>
+          <p style={{ marginBottom: "16px", fontSize: "14px" }}>
+            The deadline and grace period have expired. You can claim your full deposit back and slash the landlord's stake.
+          </p>
+          <button className="btn-primary" style={{ background: COLORS.orange, color: "#000" }} disabled={txPending} onClick={async () => {
+            try { setTxPending(true); await refund(leaseId); setSuccess("✓ Refund claimed!"); setTimeout(() => refetch(), 2000); }
+            catch (err) { setError(`Refund failed: ${err.message}`); }
+            finally { setTxPending(false); }
+          }}>
+            {txPending ? <span className="spinner"></span> : "Claim Refund"}
+          </button>
         </div>
       )}
 
@@ -690,8 +737,20 @@ function EscrowDetail({ leaseId, onBack }) {
           </div>
           <p style={{ marginBottom: "16px", fontSize: "14px" }}>Review the evidence gallery below. You can either accept the proposal to finalize the escrow, or raise a dispute.</p>
           <div style={{ display: "flex", gap: "12px" }}>
-            <button className="btn-primary" onClick={async () => { try { await accept(leaseId); setSuccess("✓ Proposal accepted!"); setTimeout(() => refetch(), 2000); } catch (err) { setError(`Accept failed: ${err.message}`); } }} disabled={accepting} style={{ background: COLORS.green }}>{accepting ? <span className="spinner"></span> : "Accept & Release"}</button>
-            <button className="btn-primary" onClick={async () => { try { await raise(leaseId); setSuccess("✓ Dispute raised."); setTimeout(() => refetch(), 2000); } catch (err) { setError(`Dispute failed: ${err.message}`); } }} disabled={raising} style={{ background: COLORS.red }}>{raising ? <span className="spinner"></span> : "Raise Dispute"}</button>
+            <button className="btn-primary" onClick={async () => {
+              try { setTxPending(true); await accept(leaseId); setSuccess("✓ Proposal accepted!"); setTimeout(() => refetch(), 2000); }
+              catch (err) { setError(`Accept failed: ${err.message}`); }
+              finally { setTxPending(false); }
+            }} disabled={txPending} style={{ background: COLORS.green }}>
+              {txPending ? <span className="spinner"></span> : "Accept & Release"}
+            </button>
+            <button className="btn-primary" onClick={async () => {
+              try { setTxPending(true); await raise(leaseId); setSuccess("✓ Dispute raised."); setTimeout(() => refetch(), 2000); }
+              catch (err) { setError(`Dispute failed: ${err.message}`); }
+              finally { setTxPending(false); }
+            }} disabled={txPending} style={{ background: COLORS.red }}>
+              {txPending ? <span className="spinner"></span> : "Raise Dispute"}
+            </button>
           </div>
         </div>
       )}
@@ -778,7 +837,10 @@ function Dashboard() {
       const data = await res.json();
       setMyLeases(data.leases || []);
     } catch (err) {
-      setLeaseLoadError(err.message || "Failed to load escrows");
+      const msg = err.message?.includes("fetch")
+        ? "Cannot reach backend — is the server running on port 3001?"
+        : err.message || "Failed to load escrows";
+      setLeaseLoadError(msg);
       setMyLeases([]);
     } finally {
       setLoadingLeases(false);

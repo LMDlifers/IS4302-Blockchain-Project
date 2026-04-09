@@ -3,7 +3,9 @@ const { escrow, provider } = require("../provider");
 const { fetchFromIPFS, uploadToIPFS } = require("../services/ipfsService");
 const { analyzeDispute } = require("../services/llmService");
 
-const CONFIDENCE_THRESHOLD = parseFloat(process.env.LLM_CONFIDENCE_THRESHOLD || "0.80");
+// Fix 3.4: validate threshold to avoid silent NaN disabling the guard
+const _rawThreshold = parseFloat(process.env.LLM_CONFIDENCE_THRESHOLD ?? "0.80");
+const CONFIDENCE_THRESHOLD = isNaN(_rawThreshold) ? (() => { throw new Error("Invalid LLM_CONFIDENCE_THRESHOLD env var"); })() : _rawThreshold;
 
 // ✅ Add this set to remember processed leases
 const processedLeases = new Set();
@@ -29,14 +31,18 @@ async function startDisputeListener() {
         if (processedLeases.has(leaseId)) {
           continue; // Skip it!
         }
-        
-        // Add to our memory so we never process it again
-        processedLeases.add(leaseId);
 
         console.log(`\n[Dispute] Lease #${leaseId} disputed. Verifier: ${verifier}`);
-        
-        // Process the dispute found
-        await processDispute(leaseId, verifier);
+
+        // Fix 3.2: add to processedLeases ONLY after successful processing
+        // so that a failure allows retry on the next poll cycle
+        try {
+          await processDispute(leaseId, verifier);
+          processedLeases.add(leaseId);
+        } catch (err) {
+          console.error(`[Dispute] Failed to process lease #${leaseId}, will retry:`, err.message);
+          // Do NOT add to processedLeases — next poll will retry
+        }
       }
 
       lastCheckedBlock = currentBlock;
@@ -52,6 +58,13 @@ async function processDispute(leaseId, verifier) {
   try {
     // 1. Fetch lease data from contract
     const lease = await escrow.leases(leaseId);
+
+    // Fix 3.3: verify lease is still in DISPUTED state before doing any work
+    // (state 2 = DISPUTED; it may have changed since the event was emitted)
+    if (lease.state !== 2n) {
+      console.warn(`[Dispute] Lease #${leaseId} is no longer DISPUTED (state=${lease.state}), skipping.`);
+      return;
+    }
 
     // Convert raw on-chain deposit (6 decimals) to human-readable USDC
     const depositHuman = Number(lease.depositAmount) / 1_000_000;
@@ -137,8 +150,9 @@ async function processDispute(leaseId, verifier) {
     }
 
   } catch (err) {
-    console.error(`[Error] Dispute handler for lease #${leaseId}:`, err.message);
+    console.error(`[Error] processDispute for lease #${leaseId}:`, err.message);
     console.error(err.stack);
+    throw err; // Re-throw so the caller (polling loop) knows to retry
   }
 }
 

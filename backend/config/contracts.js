@@ -9,6 +9,7 @@ const ESCROW_ABI = [
   // Events — must match Solidity exactly
   "event LeaseInitialized(uint256 leaseId, address landlord, address tenant, string moveInCID)",
   "event FundsDeposited(uint256 leaseId, uint256 amount)",
+  "event ReleaseProposed(uint256 leaseId, uint256 amountToLandlord, string moveOutCID)",
   "event DisputeRaised(uint256 leaseId, address verifier)",
   "event DisputeResolved(uint256 leaseId, uint256 toLandlord, uint256 toTenant)",
   "event LeaseReleased(uint256 leaseId, uint256 toLandlord, uint256 toTenant)",
@@ -20,6 +21,9 @@ const ESCROW_ABI = [
   "function feeAddress() view returns (address)",
   "function verifierPool(uint256) view returns (address)",
   "function leaseCounter() view returns (uint256)",
+  "function releaseProposed(uint256) view returns (bool)",
+  "function verdictSubmitted(uint256) view returns (bool)",
+  "function humanEscalated(uint256) view returns (bool)",
 
   // Core write functions
   "function resolveDispute(uint256 leaseId, uint256 amountToLandlord)",
@@ -39,6 +43,8 @@ const ESCROW_ABI = [
   "function submitAIVerdict(uint256 leaseId, uint256 amountToLandlord, string verdictCID)",
   "function acceptAIVerdict(uint256 leaseId)",
   "function escalateToHuman(uint256 leaseId)",
+  "function assignHumanVerifier(uint256 leaseId, address humanVerifier)",
+  "event HumanVerifierAssigned(uint256 leaseId, address humanVerifier)",
 ];
 
 module.exports = {

@@ -92,10 +92,23 @@ VITE_USDC_ADDRESS=
    - Chain ID: `1337`
    - Currency Symbol: `ETH`
 
-2. **Create Two Accounts** in MetaMask:
-   - Rename Account 1 → **"Landlord"**
-   - Create Account 2 → Rename to **"Tenant"**
-   - Note down the **Ethereum (`0x...`) address** of the Tenant account
+2. **Import the Landlord account** (Hardhat Account #0):
+   - MetaMask → top-right account icon → **Add account → Import account**
+   - Paste private key: `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`
+   - Rename it **"Landlord"** — it will show 10,000 ETH on the Hardhat network
+   - Address: `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`
+
+3. **Import the Tenant account** (Hardhat Account #1):
+   - Same steps, paste private key: `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d`
+   - Rename it **"Tenant"**
+   - Address: `0x70997970C51812dc3A010C7d01b50e0d17dc79C8`
+
+4. **Add MockUSDC token** (so USDC balances are visible in MetaMask):
+   - MetaMask → **Tokens** tab → **Import tokens**
+   - Token contract address: `0x5FbDB2315678afecb367f032d93F642f64180aa3`
+   - Symbol: `USDC`, Decimals: `6`
+
+> ⚠️ These are publicly known Hardhat test keys. **Never use them on mainnet.**
 
 ### Step 4: Start the Local Blockchain
 
@@ -123,18 +136,9 @@ USDC_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
 ```
 > ⚠️ The addresses above are **deterministic** — they will always be the same if you redeploy on a fresh Hardhat node.
 
-### Step 6: Fund Your MetaMask Wallet
+> ✅ The deploy script auto-mints **10,000 USDC** to the Landlord (Account #0). No manual funding needed if you imported the Hardhat accounts in Step 3.
 
-MetaMask starts with 0 balance on local networks. Run this in a terminal inside `contracts/`:
-
-```powershell
-node -e "const { ethers } = require('ethers'); const abi = ['function mint(address to, uint256 amount) public']; const provider = new ethers.JsonRpcProvider('http://127.0.0.1:8545'); const wallet = new ethers.Wallet('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', provider); const usdc = new ethers.Contract('0x5FbDB2315678afecb367f032d93F642f64180aa3', abi, wallet); async function fill() { const target = 'PASTE_YOUR_LANDLORD_0x_ADDRESS_HERE'; let nonce = await provider.getTransactionCount(wallet.address); await wallet.sendTransaction({ to: target, value: ethers.parseEther('10.0'), nonce: nonce++ }); await usdc.mint(target, ethers.parseUnits('10000', 6), { nonce: nonce++ }); console.log('Done! Wallet funded.'); } fill();"
-```
-> Replace `PASTE_YOUR_LANDLORD_0x_ADDRESS_HERE` with the Landlord's MetaMask address.
-
-After running, check MetaMask — your Landlord account should show **~10 ETH**.
-
-### Step 7: Start Backend & Frontend
+### Step 6: Start Backend & Frontend
 
 ```bash
 # Terminal 3 — Backend
@@ -204,6 +208,9 @@ Follow steps 1–3 of Scenario A to get to `LOCKED` state, then:
 | **Blank review page** | Page loaded before file upload confirmed | Click "Next: Review" — a demo CID is auto-assigned if no file uploaded |
 | **Tenant shows $0.00** | Tenant wallet not funded | Run the Fill Wallet script above for the Tenant address too |
 | **`Failed to fetch` (IPFS)** | Pinata JWT not configured | The app falls back to a demo CID automatically |
+| **`ERC20InsufficientBalance`** | Connected as Tenant when creating lease, or wallet has no USDC | Switch MetaMask to **Landlord** account (`0xf39Fd6...`) |
+| **`Failed to load escrows (500)`** | Contract address in `backend/.env` is stale after Hardhat restart | Redeploy contracts and update both `.env` files with new addresses |
+| **Wrong network banner in app** | MetaMask is on mainnet, not Hardhat | Switch network to **Hardhat (Chain ID 1337)** in MetaMask |
 
 ---
 
@@ -225,7 +232,7 @@ Follow steps 1–3 of Scenario A to get to `LOCKED` state, then:
 | `acceptRelease()` | Tenant accepts split, funds distributed | Tenant |
 | `raiseDispute()` | Moves to DISPUTED, triggers AI backend | Tenant |
 | `resolveDispute()` | AI verdict submitted on-chain | Backend (Verifier) |
-| `timeoutRefund()` | Refunds tenant if deadline + grace period passes | Anyone |
+| `timeoutRefund()` | Refunds tenant if deadline + grace period passes | Tenant |
 
 ---
 

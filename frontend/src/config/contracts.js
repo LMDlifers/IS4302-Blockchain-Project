@@ -9,6 +9,8 @@ export const USDC_ADDRESS = import.meta.env.VITE_USDC_ADDRESS;
 export const ESCROW_ABI = [
   // Events
   { anonymous: false, inputs: [{ indexed: true, internalType: "uint256", name: "leaseId", type: "uint256" }, { indexed: false, internalType: "address", name: "landlord", type: "address" }, { indexed: false, internalType: "address", name: "tenant", type: "address" }, { indexed: false, internalType: "string", name: "moveInCID", type: "string" }], name: "LeaseInitialized", type: "event" },
+  { anonymous: false, inputs: [{ indexed: true, internalType: "uint256", name: "leaseId", type: "uint256" }, { indexed: false, internalType: "uint256", name: "amountToLandlord", type: "uint256" }, { indexed: false, internalType: "string", name: "moveOutCID", type: "string" }], name: "ReleaseProposed", type: "event" },
+  { anonymous: false, inputs: [{ indexed: true, internalType: "uint256", name: "leaseId", type: "uint256" }, { indexed: false, internalType: "address", name: "humanVerifier", type: "address" }], name: "HumanVerifierAssigned", type: "event" },
   { anonymous: false, inputs: [{ indexed: true, internalType: "uint256", name: "leaseId", type: "uint256" }, { indexed: false, internalType: "uint256", name: "amount", type: "uint256" }], name: "FundsDeposited", type: "event" },
   { anonymous: false, inputs: [{ indexed: true, internalType: "uint256", name: "leaseId", type: "uint256" }, { indexed: false, internalType: "address", name: "verifier", type: "address" }], name: "DisputeRaised", type: "event" },
   { anonymous: false, inputs: [{ indexed: true, internalType: "uint256", name: "leaseId", type: "uint256" }, { indexed: false, internalType: "uint256", name: "toLandlord", type: "uint256" }, { indexed: false, internalType: "uint256", name: "toTenant", type: "uint256" }], name: "DisputeResolved", type: "event" },
@@ -34,7 +36,11 @@ export const ESCROW_ABI = [
   { inputs: [{ internalType: "uint256", name: "", type: "uint256" }], name: "tenantAgreedAI", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "view", type: "function" },
   { inputs: [{ internalType: "uint256", name: "", type: "uint256" }], name: "landlordAgreedAI", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "view", type: "function" },
   { inputs: [{ internalType: "uint256", name: "leaseId", type: "uint256" }], name: "acceptAIVerdict", outputs: [], stateMutability: "nonpayable", type: "function" },
-  { inputs: [{ internalType: "uint256", name: "leaseId", type: "uint256" }], name: "escalateToHuman", outputs: [], stateMutability: "nonpayable", type: "function" }
+  { inputs: [{ internalType: "uint256", name: "leaseId", type: "uint256" }], name: "escalateToHuman", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ internalType: "uint256", name: "leaseId", type: "uint256" }, { internalType: "address", name: "humanVerifier", type: "address" }], name: "assignHumanVerifier", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ internalType: "uint256", name: "", type: "uint256" }], name: "verdictSubmitted", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "view", type: "function" },
+  { inputs: [{ internalType: "uint256", name: "", type: "uint256" }], name: "humanEscalated", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "view", type: "function" },
+  { inputs: [{ internalType: "uint256", name: "", type: "uint256" }], name: "releaseProposed", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "view", type: "function" }
 ];
 
 export const USDC_ABI = [

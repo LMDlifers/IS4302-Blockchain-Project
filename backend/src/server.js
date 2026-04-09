@@ -86,23 +86,12 @@ app.get('/api/leases', async (req, res) => {
   try {
     const user = req.query.user?.toLowerCase();
     
-    // Instead of using leaseCounter, we fetch leases sequentially until we hit an empty one
+    // Fix 3.7: use leaseCounter to bound the loop — avoids O(n) error-based termination
+    const total = Number(await escrow.leaseCounter());
     const leases = [];
-    let currentId = 1;
-    
-    while (true) {
-      try {
-        const lease = await escrow.leases(currentId);
-        // An empty lease will have address(0) as landlord
-        if (!lease || lease.landlord === '0x0000000000000000000000000000000000000000') {
-          break; // We've reached the end of the created leases
-        }
-        
-        leases.push(serializeLease(currentId, lease));
-        currentId++;
-      } catch (err) {
-        break; // If calling escrow.leases(id) fails, we've reached the end
-      }
+    for (let currentId = 1; currentId <= total; currentId++) {
+      const lease = await escrow.leases(currentId);
+      leases.push(serializeLease(currentId, lease));
     }
 
     const filteredLeases = user
@@ -143,7 +132,8 @@ app.get('/api/leases/:id', async (req, res) => {
       landlordStake: lease.landlordStake.toString(),
       deadline: lease.deadline.toString(),
       gracePeriod: lease.gracePeriod.toString(),
-      ipfsCID: lease.ipfsCID,
+      moveInCID: lease.moveInCID || "",
+      moveOutCID: lease.moveOutCID || "",
       state: Number(lease.state),
       amountToLandlord: lease.amountToLandlord.toString(),
     });
@@ -190,8 +180,9 @@ app.listen(PORT, async () => {
   console.log('Initializing blockchain event listeners...\n');
 
   try {
-    startLeaseListeners();
-    startDisputeListener();
+    // Fix 3.5: await both async functions so startup errors are caught and crash the process
+    await startLeaseListeners();
+    await startDisputeListener();
     console.log('✓ Event listeners initialized\n');
   } catch (err) {
     console.error('Error initializing listeners:', err.message);
