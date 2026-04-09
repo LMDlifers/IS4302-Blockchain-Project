@@ -1,76 +1,410 @@
-import { useState, useEffect } from "react";
-import { useAccount, usePublicClient } from "wagmi";
-import { useResolveDispute } from "../hooks/useEscrow";
+// frontend/src/components/AdminPanel.jsx
+import { useState, useEffect, useCallback } from "react";
+import { useAccount, usePublicClient, useReadContract } from "wagmi";
+import { ESCROW_ABI, ESCROW_ADDRESS } from "../config/contracts";
 
 const COLORS = {
   bg: "#0A0A0F", surface: "#12121A", card: "#16161F",
   border: "#1E1E2E", accent: "#00FF87", orange: "#F59E0B",
-  red: "#EF4444", blue: "#3B82F6",
+  red: "#EF4444", blue: "#3B82F6", purple: "#A78BFA",
   textPrimary: "#F1F5F9", textSecondary: "#94A3B8", textMuted: "#475569",
 };
 
-export default // ========== ADMIN PANEL ==========
-function AdminPanel({ onBack = () => {} }) {
-  const { address } = useAccount();
-  const { resolve } = useResolveDispute();
-  const publicClient = usePublicClient();
+const IPFS_GATEWAY = "https://gateway.pinata.cloud/ipfs/";
+const STATE_NAMES = ["CREATED", "LOCKED", "DISPUTED", "RELEASED", "REFUNDED"];
+
+function useLeaseDetails(leaseId) {
+  const [details, setDetails] = useState(null);
+  const [aiVerdict, setAiVerdict] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!leaseId) return;
+    setLoading(true);
+    fetch(`http://localhost:3001/api/leases/${leaseId}`)
+      .then((r) => r.json())
+      .then((d) => setDetails(d))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [leaseId]);
+
+  const { data: verdictCID } = useReadContract({
+    address: ESCROW_ADDRESS,
+    abi: ESCROW_ABI,
+    functionName: "aiVerdictCIDs",
+    args: [BigInt(leaseId ?? 0)],
+    query: { enabled: !!leaseId },
+  });
+
+  useEffect(() => {
+    if (!verdictCID || verdictCID === "") return;
+    fetch(`${IPFS_GATEWAY}${verdictCID}`)
+      .then((r) => r.json())
+      .then((d) => setAiVerdict(d))
+      .catch(() => {});
+  }, [verdictCID]);
+
+  return { details, aiVerdict, verdictCID, loading };
+}
+
+function EvidenceGallery({ cid, label, photoKey }) {
+  const [meta, setMeta] = useState(null);
+  const [fetchError, setFetchError] = useState(false);
+
+  useEffect(() => {
+    if (!cid) return;
+    setMeta(null);
+    setFetchError(false);
+    fetch(`https://gateway.pinata.cloud/ipfs/${cid}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("IPFS fetch failed");
+        return r.json();
+      })
+      .then((d) => setMeta(d))
+      .catch(() => setFetchError(true));
+  }, [cid]);
+
+  if (!cid) return (
+    <p style={{ color: COLORS.textMuted, fontSize: "12px" }}>No {label} CID on-chain.</p>
+  );
+
+  const photos = meta?.[photoKey] ?? [];
+
+  return (
+    <div>
+      <p style={{ color: COLORS.textSecondary, fontSize: "13px", fontWeight: "600", marginBottom: "8px" }}>
+        {label}
+      </p>
+      {!meta && !fetchError && (
+        <p style={{ color: COLORS.textMuted, fontSize: "12px" }}>
+          <span className="spinner" style={{ display: "inline-block", marginRight: "6px", verticalAlign: "middle" }}></span>
+          Fetching from IPFS…
+        </p>
+      )}
+      {fetchError && (
+        <p style={{ color: COLORS.red, fontSize: "12px" }}>⚠️ Could not fetch IPFS metadata.</p>
+      )}
+      {meta && photos.length > 0 && !photos.every(p => p.includes("Fallback")) ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: "6px" }}>
+          {photos
+            .filter(p => !p.includes("Fallback"))
+            .map((photoCid, i) => (
+              <a key={i} href={`https://gateway.pinata.cloud/ipfs/${photoCid}`} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={`https://gateway.pinata.cloud/ipfs/${photoCid}`}
+                  alt={`${label} ${i + 1}`}
+                  style={{
+                    width: "100%", height: "90px", objectFit: "cover",
+                    borderRadius: "6px", border: `1px solid ${COLORS.border}`,
+                    cursor: "pointer", transition: "opacity 0.2s",
+                  }}
+                  onError={(e) => { e.target.style.display = "none"; }}
+                  onMouseOver={(e) => { e.target.style.opacity = "0.8"; }}
+                  onMouseOut={(e) => { e.target.style.opacity = "1"; }}
+                />
+              </a>
+            ))}
+        </div>
+      ) : meta ? (
+        <p style={{ color: COLORS.textMuted, fontSize: "12px" }}>No photos uploaded.</p>
+      ) : null}
+      {cid && (
+        <a
+          href={`https://gateway.pinata.cloud/ipfs/${cid}`}
+          target="_blank" rel="noopener noreferrer"
+          style={{ fontSize: "11px", color: COLORS.textMuted, display: "inline-block", marginTop: "8px" }}
+        >
+          ↗ Raw metadata: {cid.slice(0, 16)}…
+        </a>
+      )}
+    </div>
+  );
+}
+
+function DisputeCard({ d, onResolved }) {
+  const [expanded, setExpanded] = useState(false);
+  const [amountInput, setAmountInput] = useState("");
+  const [showResolveForm, setShowResolveForm] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const { details, aiVerdict, verdictCID, loading } = useLeaseDetails(expanded ? d.leaseId : null);
+
+  const deposit = details ? (Number(details.depositAmount) / 1_000_000).toFixed(2) : "—";
+  const stake = details ? (Number(details.landlordStake) / 1_000_000).toFixed(2) : "—";
+  const state = details ? (STATE_NAMES[details.state] ?? "UNKNOWN") : "—";
+  const deadline = details ? new Date(Number(details.deadline) * 1000).toLocaleString() : "—";
+
+  const handleResolveClick = async () => {
+    if (!amountInput) { setLocalError("Enter an amount"); return; }
+    setLocalError("");
+    try {
+      setResolving(true);
+      const res = await fetch(
+        `http://localhost:3001/api/disputes/${d.leaseId}/resolve-onchain`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ amountToLandlord: amountInput }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error);
+      }
+      setShowResolveForm(false);
+      onResolved(); // reload parent list
+    } catch (err) {
+      setLocalError(`Error: ${err.message}`);
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  return (
+    <div style={{
+      background: COLORS.card,
+      border: `1px solid ${d.status === "resolved" ? "rgba(0,255,135,0.3)" : COLORS.orange}`,
+      borderRadius: "12px", padding: "18px",
+    }}>
+      {/* Header row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "10px" }}>
+        <div>
+          <div style={{ fontSize: "18px", fontWeight: "700" }}>Lease #{d.leaseId}</div>
+          <div style={{ fontSize: "13px", color: COLORS.textSecondary, marginTop: "4px" }}>
+            Contested by: <span style={{ color: COLORS.textPrimary }}>{d.role}</span> — {d.contestedBy?.slice(0, 10)}…
+          </div>
+          <div style={{ fontSize: "12px", color: COLORS.textMuted, marginTop: "2px" }}>
+            {new Date(d.timestamp).toLocaleString()}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <span style={{
+            padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: "500",
+            background: d.status === "resolved" ? "rgba(0,255,135,0.1)" : "rgba(245,158,11,0.1)",
+            color: d.status === "resolved" ? COLORS.accent : COLORS.orange,
+          }}>
+            {d.status === "resolved" ? "Resolved" : "Pending"}
+          </span>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            style={{
+              background: "transparent", border: `1px solid ${COLORS.border}`,
+              color: COLORS.textSecondary, padding: "4px 12px", borderRadius: "6px",
+              fontSize: "12px", cursor: "pointer",
+            }}
+          >
+            {expanded ? "▲ Hide" : "▼ Details"}
+          </button>
+        </div>
+      </div>
+
+      {/* Statement */}
+      {d.statement && (
+        <div style={{
+          background: COLORS.surface, borderRadius: "8px", padding: "10px 14px",
+          marginBottom: "10px", fontSize: "13px",
+        }}>
+          <p style={{ color: COLORS.textSecondary, marginBottom: "4px", fontSize: "12px" }}>
+            Statement from {d.role}:
+          </p>
+          <p style={{ fontStyle: "italic" }}>{d.statement}</p>
+        </div>
+      )}
+
+      {/* Expanded panels */}
+      {expanded && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginTop: "14px" }}>
+          {loading && <p style={{ color: COLORS.textMuted, fontSize: "13px" }}>Loading on-chain data…</p>}
+
+          {details && (
+            <div style={{ background: COLORS.surface, borderRadius: "10px", padding: "14px" }}>
+              <p style={{ color: COLORS.orange, fontWeight: "600", marginBottom: "12px", fontSize: "14px" }}>
+                📋 Escrow Details
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", fontSize: "13px" }}>
+                {[
+                  ["State", state],
+                  ["Deposit", `${deposit} USDC`],
+                  ["Landlord Stake", `${stake} USDC`],
+                  ["Deadline", deadline],
+                  ["Landlord", details.landlord?.slice(0, 14) + "…"],
+                  ["Tenant", details.tenant?.slice(0, 14) + "…"],
+                  ["Verifier", details.verifier?.slice(0, 14) + "…"],
+                ].map(([label, value]) => (
+                  <div key={label}>
+                    <p style={{ color: COLORS.textMuted, fontSize: "11px", marginBottom: "2px" }}>{label}</p>
+                    <p style={{ fontFamily: "monospace", fontSize: "12px" }}>{value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {details && (
+            <div style={{ background: COLORS.surface, borderRadius: "10px", padding: "14px" }}>
+              <p style={{ color: COLORS.orange, fontWeight: "600", marginBottom: "12px", fontSize: "14px" }}>
+                🖼️ Evidence
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+                <EvidenceGallery cid={details.moveInCID} label="Move-In Photos" photoKey="moveInPhotoCIDs" />
+                <EvidenceGallery cid={details.moveOutCID} label="Move-Out Photos" photoKey="moveOutPhotoCIDs" />
+              </div>
+            </div>
+          )}
+
+          <div style={{ background: COLORS.surface, borderRadius: "10px", padding: "14px" }}>
+            <p style={{ color: COLORS.purple, fontWeight: "600", marginBottom: "12px", fontSize: "14px" }}>
+              🤖 AI Verdict
+            </p>
+            {!verdictCID ? (
+              <p style={{ color: COLORS.textMuted, fontSize: "13px" }}>No AI verdict submitted on-chain yet.</p>
+            ) : aiVerdict ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px", fontSize: "13px" }}>
+                    {aiVerdict.amountToLandlord !== undefined && (
+                    <p>
+                        Landlord: <strong style={{ color: COLORS.purple }}>
+                        {/* Check if it's raw (>10000) or human number */}
+                        {aiVerdict.amountToLandlord > 10000
+                            ? (Number(aiVerdict.amountToLandlord) / 1_000_000).toFixed(2)
+                            : Number(aiVerdict.amountToLandlord).toFixed(2)
+                        } USDC
+                        </strong>
+                        {" · "}
+                        Tenant: <strong style={{ color: COLORS.accent }}>
+                        {aiVerdict.amountToLandlord > 10000
+                            ? ((Number(details?.depositAmount ?? 0) - Number(aiVerdict.amountToLandlord)) / 1_000_000).toFixed(2)
+                            : (Number(details?.depositAmount ?? 0) / 1_000_000 - Number(aiVerdict.amountToLandlord)).toFixed(2)
+                        } USDC
+                        </strong>
+                    </p>
+                    )}
+                {aiVerdict.reasoning && (
+                  <div>
+                    <p style={{ color: COLORS.textMuted, fontSize: "11px", marginBottom: "4px" }}>Reasoning</p>
+                    <p style={{ lineHeight: "1.6", color: COLORS.textSecondary, whiteSpace: "pre-wrap" }}>
+                      {aiVerdict.reasoning}
+                    </p>
+                  </div>
+                )}
+                {aiVerdict.damages && (
+                  <div>
+                    <p style={{ color: COLORS.textMuted, fontSize: "11px", marginBottom: "4px" }}>Damage Assessment</p>
+                    <p style={{ color: COLORS.textSecondary }}>{aiVerdict.damages}</p>
+                  </div>
+                )}
+                <a
+                  href={`${IPFS_GATEWAY}${verdictCID}`}
+                  target="_blank" rel="noopener noreferrer"
+                  style={{ fontSize: "11px", color: COLORS.textMuted }}
+                >
+                  ↗ Full verdict on IPFS: {verdictCID.slice(0, 16)}…
+                </a>
+              </div>
+            ) : (
+              <p style={{ color: COLORS.textMuted, fontSize: "13px" }}>
+                Fetching AI verdict from IPFS ({verdictCID?.slice(0, 16)}…)
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Resolve section */}
+      {d.status === "resolved" ? (
+        <div style={{ fontSize: "13px", color: COLORS.textSecondary, marginTop: "10px" }}>
+          Resolved by: <span style={{ fontFamily: "monospace" }}>{d.resolvedBy?.slice(0, 10)}…</span>
+          {" · "}Tx: <span style={{ fontFamily: "monospace" }}>{d.txHash?.slice(0, 12)}…</span>
+        </div>
+      ) : showResolveForm ? (
+        <div style={{ marginTop: "14px" }}>
+          <p style={{ fontSize: "13px", color: COLORS.textSecondary, marginBottom: "8px" }}>
+            Enter the amount (USDC) to award to the <strong>landlord</strong>. Remainder goes to the tenant.
+          </p>
+          {localError && (
+            <p style={{ color: COLORS.red, fontSize: "12px", marginBottom: "8px" }}>⚠️ {localError}</p>
+          )}
+          <div style={{ display: "flex", gap: "10px" }}>
+            <input
+              type="number"
+              placeholder="Amount to landlord (USDC)"
+              value={amountInput}
+              onChange={(e) => setAmountInput(e.target.value)}
+              style={{
+                flex: 1, background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                borderRadius: "8px", padding: "10px 14px", color: COLORS.textPrimary,
+                fontFamily: "inherit", fontSize: "14px", outline: "none",
+              }}
+            />
+            <button
+              onClick={handleResolveClick}
+              disabled={resolving}
+              style={{
+                background: COLORS.accent, color: "#000", border: "none",
+                padding: "10px 20px", borderRadius: "8px", fontWeight: "600",
+                fontSize: "14px", cursor: resolving ? "not-allowed" : "pointer",
+                opacity: resolving ? 0.6 : 1,
+              }}
+            >
+              {resolving ? "…" : "Resolve On-Chain"}
+            </button>
+            <button
+              onClick={() => { setShowResolveForm(false); setLocalError(""); }}
+              style={{
+                background: "transparent", border: `1px solid ${COLORS.border}`,
+                color: COLORS.textSecondary, padding: "10px 16px",
+                borderRadius: "8px", cursor: "pointer", fontSize: "14px",
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowResolveForm(true)}
+          style={{
+            marginTop: "12px", background: COLORS.accent, color: "#000", border: "none",
+            padding: "8px 18px", borderRadius: "8px", fontWeight: "600",
+            fontSize: "13px", cursor: "pointer",
+          }}
+        >
+          Review & Resolve
+        </button>
+      )}
+    </div>
+  );
+}
+
+export default function AdminPanel({ onBack = () => {} }) {
   const [disputes, setDisputes] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState(null);
-  const [amountInput, setAmountInput] = useState("");
-  const [txPending, setTxPending] = useState(false);
   const [message, setMessage] = useState("");
 
-  const loadDisputes = async () => {
+  const loadDisputes = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("http://localhost:3001/api/disputes/all");
       const data = await res.json();
       setDisputes(data.disputes || []);
-    } catch { setMessage("Failed to load disputes"); }
-    finally { setLoading(false); }
-  };
+    } catch {
+      setMessage("Failed to load disputes");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  useEffect(() => { loadDisputes(); }, []);
+  useEffect(() => { loadDisputes(); }, [loadDisputes]);
 
-  const handleResolve = async (dispute) => {
-    if (!amountInput) { setMessage("Enter amount to award landlord"); return; }
-    try {
-      setTxPending(true);
-      setMessage("Sending on-chain resolution... (confirm in MetaMask)");
-      const txHash = await resolve(dispute.leaseId, amountInput);
-      setMessage("Waiting for confirmation...");
-      await publicClient.waitForTransactionReceipt({ hash: txHash });
-      await fetch(`http://localhost:3001/api/disputes/${dispute.leaseId}/resolve`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resolvedBy: address, txHash, amountToLandlord: amountInput }),
-      });
-      setMessage(`✓ Dispute #${dispute.leaseId} resolved on-chain!`);
-      setSelected(null);
-      setAmountInput("");
-      loadDisputes();
-    } catch (err) { setMessage(`Error: ${err.message}`); }
-    finally { setTxPending(false); }
-  };
-
-    return (
-    <div style={{ padding: "40px", maxWidth: "800px" }}>
-        <div style={{ position: "relative", marginBottom: "30px", textAlign: "center" }}>
+  return (
+    <div style={{ padding: "40px", maxWidth: "860px" }}>
+      <div style={{ position: "relative", marginBottom: "30px", textAlign: "center" }}>
         <button
           onClick={onBack}
           style={{
-            position: "absolute",
-            left: 0,
-            top: "50%",
-            transform: "translateY(-50%)",
-            background: "transparent",
-            border: `1px solid ${COLORS.border}`,
-            color: COLORS.textSecondary,
-            padding: "6px 14px",
-            borderRadius: "6px",
-            fontSize: "13px",
-            cursor: "pointer",
-            fontFamily: "'Space Grotesk', sans-serif",
+            position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)",
+            background: "transparent", border: `1px solid ${COLORS.border}`,
+            color: COLORS.textSecondary, padding: "6px 14px", borderRadius: "6px",
+            fontSize: "13px", cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif",
           }}
         >
           ← Back
@@ -94,70 +428,31 @@ function AdminPanel({ onBack = () => {} }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
         <h3>{disputes.length} escalated dispute(s)</h3>
-        <button onClick={loadDisputes} style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.textSecondary, padding: "6px 14px", borderRadius: "6px", fontSize: "13px", cursor: "pointer" }}>
+        <button
+          onClick={loadDisputes}
+          style={{
+            background: "transparent", border: `1px solid ${COLORS.border}`,
+            color: COLORS.textSecondary, padding: "6px 14px", borderRadius: "6px",
+            fontSize: "13px", cursor: "pointer",
+          }}
+        >
           Refresh
         </button>
       </div>
 
       {loading ? (
-        <p style={{ color: COLORS.textSecondary }}>Loading...</p>
+        <p style={{ color: COLORS.textSecondary }}>Loading…</p>
       ) : disputes.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "40px", color: COLORS.textSecondary, background: COLORS.card, borderRadius: "12px", border: `1px solid ${COLORS.border}` }}>
+        <div style={{
+          textAlign: "center", padding: "40px", color: COLORS.textSecondary,
+          background: COLORS.card, borderRadius: "12px", border: `1px solid ${COLORS.border}`,
+        }}>
           No escalated disputes
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
           {disputes.map((d) => (
-            <div key={d.leaseId} style={{ background: COLORS.card, border: `1px solid ${d.status === "resolved" ? "rgba(0,255,135,0.3)" : COLORS.orange}`, borderRadius: "12px", padding: "18px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
-                <div>
-                  <div style={{ fontSize: "18px", fontWeight: "700" }}>Lease #{d.leaseId}</div>
-                  <div style={{ fontSize: "13px", color: COLORS.textSecondary, marginTop: "4px" }}>
-                    Contested by: <span style={{ color: COLORS.textPrimary }}>{d.role}</span> — {d.contestedBy?.slice(0, 10)}...
-                  </div>
-                  <div style={{ fontSize: "12px", color: COLORS.textMuted, marginTop: "2px" }}>{new Date(d.timestamp).toLocaleString()}</div>
-                </div>
-                <span style={{ padding: "4px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: "500", background: d.status === "resolved" ? "rgba(0,255,135,0.1)" : "rgba(245,158,11,0.1)", color: d.status === "resolved" ? COLORS.accent : COLORS.orange }}>
-                  {d.status === "resolved" ? "Resolved" : "Pending"}
-                </span>
-              </div>
-
-              {d.statement && (
-                <div style={{ background: COLORS.surface, borderRadius: "8px", padding: "10px 14px", marginBottom: "12px", fontSize: "13px" }}>
-                  <p style={{ color: COLORS.textSecondary, marginBottom: "4px", fontSize: "12px" }}>Statement from {d.role}:</p>
-                  <p style={{ fontStyle: "italic" }}>{d.statement}</p>
-                </div>
-              )}
-
-              {d.status === "resolved" ? (
-                <div style={{ fontSize: "13px", color: COLORS.textSecondary }}>
-                  Resolved by: <span className="mono">{d.resolvedBy?.slice(0, 10)}...</span> — Tx: <span className="mono">{d.txHash?.slice(0, 12)}...</span>
-                </div>
-              ) : selected === d.leaseId ? (
-                <div style={{ marginTop: "12px" }}>
-                  <p style={{ fontSize: "13px", color: COLORS.textSecondary, marginBottom: "8px" }}>
-                    Enter the amount (USDC) to award to the <strong>landlord</strong>. Remainder goes to the tenant.
-                  </p>
-                  <div style={{ display: "flex", gap: "10px" }}>
-                    <input type="number" placeholder="Amount to landlord (USDC)" value={amountInput} onChange={(e) => setAmountInput(e.target.value)}
-                      style={{ flex: 1, background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: "8px", padding: "10px 14px", color: COLORS.textPrimary, fontFamily: "inherit", fontSize: "14px", outline: "none" }} />
-                    <button onClick={() => handleResolve(d)} disabled={txPending}
-                      style={{ background: COLORS.accent, color: "#000", border: "none", padding: "10px 20px", borderRadius: "8px", fontWeight: "600", fontSize: "14px", cursor: txPending ? "not-allowed" : "pointer", opacity: txPending ? 0.6 : 1 }}>
-                      {txPending ? "..." : "Resolve On-Chain"}
-                    </button>
-                    <button onClick={() => setSelected(null)}
-                      style={{ background: "transparent", border: `1px solid ${COLORS.border}`, color: COLORS.textSecondary, padding: "10px 16px", borderRadius: "8px", cursor: "pointer", fontSize: "14px" }}>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button onClick={() => setSelected(d.leaseId)}
-                  style={{ marginTop: "8px", background: COLORS.accent, color: "#000", border: "none", padding: "8px 18px", borderRadius: "8px", fontWeight: "600", fontSize: "13px", cursor: "pointer" }}>
-                  Review & Resolve
-                </button>
-              )}
-            </div>
+            <DisputeCard key={d.leaseId} d={d} onResolved={loadDisputes} />
           ))}
         </div>
       )}

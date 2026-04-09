@@ -179,6 +179,7 @@ export function useResolveDispute() {
       abi: ESCROW_ABI,
       functionName: "resolveDispute",
       args: [leaseId, parsedAmount],
+      gas: 3000000n,  
     });
   };
 
@@ -198,6 +199,7 @@ export function useTimeoutRefund() {
       abi: ESCROW_ABI,
       functionName: "timeoutRefund",
       args: [leaseId],
+      gas: 3000000n,  
     });
   };
 
@@ -213,6 +215,7 @@ export function useUSDCBalance(address) {
     abi: USDC_ABI,
     functionName: "balanceOf",
     args: [address],
+    gas: 3000000n,  
   });
 }
 

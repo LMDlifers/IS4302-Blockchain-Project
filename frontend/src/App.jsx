@@ -522,6 +522,9 @@ function EscrowDetail({ leaseId, onBack }) {
   const [damagePhotoCIDs, setDamagePhotoCIDs] = useState([]);
   const [damageUploading, setDamageUploading] = useState(false);
   const [damageDescription, setDamageDescription] = useState("");
+  const [aiVerdictEscalated, setAiVerdictEscalated] = useState(false);  
+  const [aiVerdictAccepted, setAiVerdictAccepted] = useState(false);
+  const [aiRejected, setAiRejected] = useState(false);
 
   const [moveInPhotos, setMoveInPhotos] = useState([]);
   const [moveOutPhotos, setMoveOutPhotos] = useState([]);
@@ -785,7 +788,14 @@ function EscrowDetail({ leaseId, onBack }) {
       {/* AI Verdict + HITL Escalation — only shown in DISPUTED state */}
       {stateIndex === 2 && (
         <>
-          <AIVerdict leaseId={leaseId} escrowDetails={lease} />
+          <AIVerdict
+            leaseId={leaseId}
+            escrowDetails={lease}
+            onAccepted={() => setAiVerdictAccepted(true)}
+            onEscalated={() => setAiVerdictEscalated(true)}
+            externalRejected={aiRejected}  
+          />
+
           <HITLEscalation
             leaseId={leaseId}
             isLandlord={isLandlord}
@@ -794,6 +804,8 @@ function EscrowDetail({ leaseId, onBack }) {
             escrowDetails={lease}
             moveInPhotos={moveInPhotos}
             moveOutPhotos={moveOutPhotos}
+            hasAccepted={aiVerdictAccepted}
+            onEscalated={() => setAiRejected(true)} 
           />
         </>
       )}

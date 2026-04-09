@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { ESCROW_ADDRESS, ESCROW_ABI } from "../config/contracts";
 
-export default function AIVerdict({ leaseId, escrowDetails }) {
+export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscalated, externalRejected = false }) {
   const { address } = useAccount();
   const [aiData, setAiData] = useState(null);
   const [fetchError, setFetchError] = useState("");
+  const [userRejected, setUserRejected] = useState(false);
 
   const landlordAddr = escrowDetails?.[0];
   const tenantAddr = escrowDetails?.[1];
@@ -18,16 +19,11 @@ export default function AIVerdict({ leaseId, escrowDetails }) {
   const isLandlord = address && landlordAddr && address.toLowerCase() === landlordAddr.toLowerCase();
   const canAct = isTenant || isLandlord;
 
-  // Safely parse leaseId to BigInt for wagmi hooks
   const safeLeaseId = useMemo(() => {
-    try {
-      return BigInt(leaseId?.toString() || "0");
-    } catch {
-      return BigInt(0);
-    }
+    try { return BigInt(leaseId?.toString() || "0"); }
+    catch { return BigInt(0); }
   }, [leaseId]);
 
-  // Add refetch functions to all read contracts
   const { data: verdictCID, isLoading: isVerdictCidLoading, refetch: refetchVerdictCid } = useReadContract({
     address: ESCROW_ADDRESS,
     abi: ESCROW_ABI,
@@ -51,14 +47,12 @@ export default function AIVerdict({ leaseId, escrowDetails }) {
     args: [safeLeaseId],
     query: { refetchInterval: 4000 },
   });
+   const isRejected = userRejected || externalRejected;
 
+  // Load AI verdict from IPFS
   useEffect(() => {
     const loadVerdict = async () => {
-      if (!verdictCID || verdictCID === "") {
-        setAiData(null);
-        return;
-      }
-
+      if (!verdictCID || verdictCID === "") { setAiData(null); return; }
       try {
         setFetchError("");
         const res = await fetch(`https://gateway.pinata.cloud/ipfs/${verdictCID}`);
@@ -70,30 +64,47 @@ export default function AIVerdict({ leaseId, escrowDetails }) {
         setFetchError(err.message || "Failed to load AI verdict");
       }
     };
-
     loadVerdict();
   }, [verdictCID]);
+
+  // On mount: check backend if this user already escalated (persists across page reloads)
+  useEffect(() => {
+    if (!leaseId || !address) return;
+    fetch(`http://localhost:3001/api/disputes/${leaseId}/escalation-status`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.escalated && data.contestedBy?.toLowerCase() === address.toLowerCase()) {
+          setUserRejected(true);
+          onEscalated?.();
+        }
+      })
+      .catch(() => {});
+  }, [leaseId, address]);
 
   const { writeContract: writeAccept, data: acceptHash, isPending: isAcceptPending } = useWriteContract();
   const { writeContract: writeEscalate, data: escalateHash, isPending: isEscalatePending } = useWriteContract();
 
-  // Wait for the transactions to be fully mined on the blockchain
-  const { isSuccess: isAcceptSuccess, isLoading: isAcceptConfirming } = useWaitForTransactionReceipt({
-    hash: acceptHash,
-  });
+  const { isSuccess: isAcceptSuccess, isLoading: isAcceptConfirming } = useWaitForTransactionReceipt({ hash: acceptHash });
+  const { isSuccess: isEscalateSuccess, isLoading: isEscalateConfirming } = useWaitForTransactionReceipt({ hash: escalateHash });
 
-  const { isSuccess: isEscalateSuccess, isLoading: isEscalateConfirming } = useWaitForTransactionReceipt({
-    hash: escalateHash,
-  });
-
-  // When a transaction completes successfully, silently refetch the data instead of reloading the page
   useEffect(() => {
-    if (isAcceptSuccess || isEscalateSuccess) {
+    if (isAcceptSuccess) {
       refetchVerdictCid();
       refetchTenantAgreed();
       refetchLandlordAgreed();
+      onAccepted?.();
     }
-  }, [isAcceptSuccess, isEscalateSuccess, refetchVerdictCid, refetchTenantAgreed, refetchLandlordAgreed]);
+  }, [isAcceptSuccess, refetchVerdictCid, refetchTenantAgreed, refetchLandlordAgreed, onAccepted]);
+
+  useEffect(() => {
+    if (isEscalateSuccess) {
+      refetchVerdictCid();
+      refetchTenantAgreed();
+      refetchLandlordAgreed();
+      setUserRejected(true);
+      onEscalated?.();
+    }
+  }, [isEscalateSuccess, refetchVerdictCid, refetchTenantAgreed, refetchLandlordAgreed, onEscalated]);
 
   const handleAccept = () => {
     writeAccept({
@@ -141,7 +152,7 @@ export default function AIVerdict({ leaseId, escrowDetails }) {
 
   return (
     <div className="card" style={{ marginTop: "20px", background: "rgba(59, 130, 246, 0.05)", borderColor: "rgba(59, 130, 246, 0.3)" }}>
-      
+
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "20px", borderBottom: "1px solid rgba(59, 130, 246, 0.2)", paddingBottom: "16px" }}>
         <span style={{ fontSize: "24px" }}>🤖</span>
@@ -156,7 +167,6 @@ export default function AIVerdict({ leaseId, escrowDetails }) {
             {aiData?.amountToLandlord !== undefined ? `${aiData.amountToLandlord} USDC` : "Loading..."}
           </p>
         </div>
-
         <div style={{ background: "rgba(0,0,0,0.2)", padding: "16px", borderRadius: "8px", border: "1px solid #1E1E2E" }}>
           <p style={{ color: "#94A3B8", fontSize: "12px", marginBottom: "4px" }}>AI Confidence</p>
           <p style={{ fontSize: "18px", fontWeight: "700", color: aiData?.confidence >= 0.8 ? "#00FF87" : "#F59E0B" }}>
@@ -173,61 +183,65 @@ export default function AIVerdict({ leaseId, escrowDetails }) {
         </p>
       </div>
 
-      {/* Agreement Status */}
+      {/* Agreement Status — shows Rejected badge if this user escalated */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px", background: "#12121A", padding: "12px 16px", borderRadius: "8px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ color: "#94A3B8", fontSize: "13px" }}>Tenant Status:</span>
-          <span className={`status-badge ${tenantAgreed ? "status-released" : "status-locked"}`}>
-            {tenantAgreed ? "Accepted" : "Pending"}
+          <span className={`status-badge ${
+            tenantAgreed ? "status-released"
+            : (isRejected) ? "status-disputed"
+            : "status-locked"
+          }`}>
+            {tenantAgreed ? "Accepted" : (isRejected) ? "Rejected" : "Pending"}
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ color: "#94A3B8", fontSize: "13px" }}>Landlord Status:</span>
-          <span className={`status-badge ${landlordAgreed ? "status-released" : "status-locked"}`}>
-            {landlordAgreed ? "Accepted" : "Pending"}
+          <span className={`status-badge ${
+            landlordAgreed ? "status-released"
+            : (isRejected) ? "status-disputed"
+            : "status-locked"
+          }`}>
+            {landlordAgreed ? "Accepted" : (isRejected) ? "Rejected" : "Pending"}
           </span>
         </div>
       </div>
 
       {/* Error State */}
       {fetchError && (
-        <div className="alert alert-error" style={{ marginBottom: "20px" }}>
-          {fetchError}
-        </div>
+        <div className="alert alert-error" style={{ marginBottom: "20px" }}>{fetchError}</div>
       )}
 
       {/* Action Buttons */}
       {!canAct ? (
-         <p style={{ textAlign: "center", color: "#94A3B8", fontSize: "13px", margin: 0 }}>
-           Only the tenant and landlord can respond to this proposal.
-         </p>
+        <p style={{ textAlign: "center", color: "#94A3B8", fontSize: "13px", margin: 0 }}>
+          Only the tenant and landlord can respond to this proposal.
+        </p>
       ) : hasCurrentUserAccepted ? (
         <div className="alert alert-success" style={{ justifyContent: "center", margin: 0 }}>
           ✅ You have accepted this proposal. Waiting for the other party...
         </div>
+      ) : isRejected ? (
+        <div style={{
+          padding: "12px 16px", borderRadius: "8px",
+          background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)",
+          color: "#EF4444", fontSize: "13px", fontWeight: "500", textAlign: "center",
+        }}>
+          ❌ You or the other party rejected this AI proposal and requested human arbitration.
+        </div>
       ) : (
         <div style={{ display: "flex", gap: "12px" }}>
-          <button 
-            className="btn-primary" 
-            onClick={handleAccept} 
-            disabled={isAcceptPending || isAcceptConfirming} 
+          <button
+            className="btn-primary"
+            onClick={handleAccept}
+            disabled={isAcceptPending || isAcceptConfirming}
             style={{ flex: 1, justifyContent: "center" }}
           >
-            {isAcceptPending || isAcceptConfirming ? (
-              <><span className="spinner"></span> Accepting...</>
-            ) : "Accept Proposal"}
+            {isAcceptPending || isAcceptConfirming
+              ? <><span className="spinner"></span> Accepting...</>
+              : "Accept Proposal"}
           </button>
           
-          {/* <button 
-            className="btn-ghost" 
-            onClick={handleEscalate} 
-            disabled={isEscalatePending || isEscalateConfirming} 
-            style={{ flex: 1, color: "#EF4444", borderColor: "rgba(239, 68, 68, 0.3)" }}
-          >
-            {isEscalatePending || isEscalateConfirming ? (
-              <><span className="spinner" style={{ borderTopColor: "#EF4444" }}></span> Escalating...</>
-            ) : "Reject & Escalate"}
-          </button> */}
         </div>
       )}
     </div>

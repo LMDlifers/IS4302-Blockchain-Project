@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const { ethers } = require("ethers");
 require('dotenv').config();
 
 const { startDisputeListener } = require('./listeners/disputeListener');
@@ -16,8 +17,6 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 const PORT = process.env.PORT || 3001;
 
-// ========== IN-MEMORY HITL STORE ==========
-// Replace with a database (e.g. SQLite / MongoDB) in production
 const escalations = {};
 
 function serializeLease(leaseId, lease) {
@@ -102,20 +101,7 @@ app.get('/api/leases', async (req, res) => {
 app.get('/api/leases/:id', async (req, res) => {
   try {
     const lease = await escrow.leases(req.params.id);
-    res.json({
-      leaseId: req.params.id,
-      landlord: lease.landlord,
-      tenant: lease.tenant,
-      verifier: lease.verifier,
-      depositAmount: lease.depositAmount.toString(),
-      landlordStake: lease.landlordStake.toString(),
-      deadline: lease.deadline.toString(),
-      gracePeriod: lease.gracePeriod.toString(),
-      moveInCID: lease.moveInCID || "",
-      moveOutCID: lease.moveOutCID || "",
-      state: Number(lease.state),
-      amountToLandlord: lease.amountToLandlord.toString(),
-    });
+    res.json(serializeLease(req.params.id, lease));
   } catch (err) {
     console.error('[Error] GET /api/leases/:id', err.message);
     res.status(400).json({ error: err.message });
@@ -141,33 +127,23 @@ app.post('/api/disputes/analyze', async (req, res) => {
 });
 
 // ========== HITL ESCALATION ROUTES ==========
-
-// POST /api/disputes/:leaseId/escalate — tenant or landlord contests AI verdict
 app.post('/api/disputes/:leaseId/escalate', (req, res) => {
   const { leaseId } = req.params;
   const { contestedBy, role, statement, timestamp } = req.body;
-
   if (!contestedBy || !role) {
     return res.status(400).json({ error: 'contestedBy and role are required' });
   }
-
   escalations[leaseId] = {
-    leaseId,
-    contestedBy,
-    role,
+    leaseId, contestedBy, role,
     statement: statement || null,
     timestamp: timestamp || new Date().toISOString(),
     status: 'pending',
     escalated: true,
   };
-
   console.log(`[HITL] ⚖️  Dispute escalated for lease #${leaseId} by ${role} (${contestedBy})`);
-  // TODO: add email/Telegram notification to verifier here
-
   res.json(escalations[leaseId]);
 });
 
-// GET /api/disputes/:leaseId/escalation-status — check if a lease has been escalated
 app.get('/api/disputes/:leaseId/escalation-status', (req, res) => {
   const { leaseId } = req.params;
   const data = escalations[leaseId];
@@ -175,32 +151,48 @@ app.get('/api/disputes/:leaseId/escalation-status', (req, res) => {
   res.json(data);
 });
 
-// GET /api/disputes/all — admin panel fetches all escalated disputes
-// NOTE: this route must be defined BEFORE /api/disputes/:leaseId to avoid conflict
+// NOTE: /api/disputes/all MUST be before /api/disputes/:leaseId to avoid route conflict
 app.get('/api/disputes/all', (req, res) => {
   res.json({ disputes: Object.values(escalations) });
 });
 
-// POST /api/disputes/:leaseId/resolve — admin marks dispute as resolved after on-chain tx
 app.post('/api/disputes/:leaseId/resolve', (req, res) => {
   const { leaseId } = req.params;
   const { resolvedBy, txHash, amountToLandlord } = req.body;
-
   if (!escalations[leaseId]) {
     return res.status(404).json({ error: `No escalation found for lease #${leaseId}` });
   }
-
   escalations[leaseId] = {
     ...escalations[leaseId],
-    status: 'resolved',
-    resolvedBy,
-    txHash,
-    amountToLandlord,
+    status: 'resolved', resolvedBy, txHash, amountToLandlord,
     resolvedAt: new Date().toISOString(),
   };
-
   console.log(`[HITL] ✓ Dispute for lease #${leaseId} resolved by ${resolvedBy}`);
   res.json(escalations[leaseId]);
+});
+
+// POST /api/disputes/:leaseId/resolve-onchain — backend wallet calls resolveDispute
+app.post('/api/disputes/:leaseId/resolve-onchain', async (req, res) => {
+  const { leaseId } = req.params;
+  const { amountToLandlord } = req.body;
+  try {
+    // amountToLandlord is human USDC (e.g. "300"), parseUnits converts to 6-decimal raw
+    const parsedAmount = ethers.parseUnits(String(amountToLandlord), 6);
+    const tx = await escrow.resolveDispute(leaseId, parsedAmount);
+    await tx.wait();
+
+    if (escalations[leaseId]) {
+      escalations[leaseId].status = 'resolved';
+      escalations[leaseId].txHash = tx.hash;
+      escalations[leaseId].resolvedAt = new Date().toISOString();
+    }
+
+    console.log(`[HITL] ✓ resolveDispute called for lease #${leaseId}. Tx: ${tx.hash}`);
+    res.json({ success: true, txHash: tx.hash });
+  } catch (err) {
+    console.error(`[HITL] resolveDispute failed:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ========== STARTUP ==========

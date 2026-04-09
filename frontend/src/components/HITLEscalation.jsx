@@ -1,3 +1,4 @@
+// frontend/src/components/HITLEscalation.jsx
 import { useEffect, useState } from "react";
 
 const COLORS = {
@@ -21,6 +22,9 @@ export default function HITLEscalation({
   escrowDetails,
   moveInPhotos = [],
   moveOutPhotos = [],
+  tenantAgreed = false,
+  landlordAgreed = false,
+  onEscalated,  
 }) {
   const [status, setStatus] = useState(null);
   const [statement, setStatement] = useState("");
@@ -51,38 +55,34 @@ export default function HITLEscalation({
   }, [leaseId]);
 
   const handleSubmitEscalation = async () => {
-    try {
-      setStatus("submitting");
-      const res = await fetch(`http://localhost:3001/api/disputes/${leaseId}/escalate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contestedBy: address,
-          role: isLandlord ? "landlord" : "tenant",
-          statement: statement || null,
-          timestamp: new Date().toISOString(),
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to escalate");
-      const data = await res.json();
-      setEscalationData(data);
-      setStatus("submitted");
-    } catch (err) {
-      setError(err.message);
-      setStatus("error");
-    }
-  };
-
+  try {
+    setStatus("submitting");
+    const res = await fetch(`http://localhost:3001/api/disputes/${leaseId}/escalate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contestedBy: address,
+        role: isLandlord ? "landlord" : "tenant",
+        statement: statement || null,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    if (!res.ok) throw new Error("Failed to escalate");
+    const data = await res.json();
+    setEscalationData(data);
+    setStatus("submitted");
+    onEscalated?.();       // ← ADD THIS
+  } catch (err) {
+    setError(err.message);
+    setStatus("error");
+  }
+};
   if (!isLandlord && !isTenant) return null;
   if (status === null) return null;
 
-  const stateNames = ["CREATED", "LOCKED", "DISPUTED", "RELEASED", "REFUNDED"];
-  const stateIndex = Number(escrowDetails?.[9] || 0);
-  const state = stateNames[stateIndex] || "UNKNOWN";
-  const landlord = escrowDetails?.[0] || "0x0000000000000000000000000000000000000000";
-  const tenant = escrowDetails?.[1] || "0x0000000000000000000000000000000000000000";
-  const deposit = (Number(escrowDetails?.[3] || 0) / 1_000_000).toFixed(2);
-  const stake = (Number(escrowDetails?.[4] || 0) / 1_000_000).toFixed(2);
+  // Hide only for the specific user who accepted on-chain
+  const thisUserAccepted = (isTenant && tenantAgreed) || (isLandlord && landlordAgreed);
+  if (thisUserAccepted) return null;
 
   return (
     <div className="card" style={{ marginTop: "20px", borderColor: status === "submitted" ? COLORS.orange : COLORS.border }}>
@@ -90,53 +90,6 @@ export default function HITLEscalation({
         <span style={{ fontSize: "20px" }}>⚖️</span>
         <h3>Human Review</h3>
       </div>
-
-      {/* <div className="card" style={{ marginBottom: "16px", background: COLORS.surface }}>
-        <h4 style={{ marginBottom: "12px", color: COLORS.orange }}>Escrow Details</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", fontSize: "13px" }}>
-          <div><p style={{ color: COLORS.textSecondary, marginBottom: "4px" }}>Lease ID</p><p>{leaseId}</p></div>
-          <div><p style={{ color: COLORS.textSecondary, marginBottom: "4px" }}>State</p><p>{state}</p></div>
-          <div><p style={{ color: COLORS.textSecondary, marginBottom: "4px" }}>Landlord</p><p className="mono">{landlord.slice(0, 10)}...</p></div>
-          <div><p style={{ color: COLORS.textSecondary, marginBottom: "4px" }}>Tenant</p><p className="mono">{tenant.slice(0, 10)}...</p></div>
-          <div><p style={{ color: COLORS.textSecondary, marginBottom: "4px" }}>Deposit</p><p>{deposit} USDC</p></div>
-          <div><p style={{ color: COLORS.textSecondary, marginBottom: "4px" }}>Stake</p><p>{stake} USDC</p></div>
-        </div>
-      </div>
-
-      <div className="card" style={{ marginBottom: "16px" }}>
-        <h4 style={{ marginBottom: "12px", color: COLORS.orange }}>Evidence Gallery</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-          <div>
-            <p style={{ color: COLORS.textSecondary, marginBottom: "8px" }}>Move-in Photos</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: "8px" }}>
-              {moveInPhotos.length > 0 ? moveInPhotos.map((cid, i) => (
-                <a key={i} href={`https://gateway.pinata.cloud/ipfs/${cid}`} target="_blank" rel="noopener noreferrer">
-                  <img
-                    src={`https://gateway.pinata.cloud/ipfs/${cid}`}
-                    alt={`Move-in ${i}`}
-                    style={{ width: "100%", height: "90px", objectFit: "cover", borderRadius: "6px" }}
-                  />
-                </a>
-              )) : <p style={{ color: COLORS.textMuted, fontSize: "12px" }}>No move-in photos.</p>}
-            </div>
-          </div>
-
-          <div>
-            <p style={{ color: COLORS.textSecondary, marginBottom: "8px" }}>Move-out Photos</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: "8px" }}>
-              {moveOutPhotos.length > 0 ? moveOutPhotos.map((cid, i) => (
-                <a key={i} href={`https://gateway.pinata.cloud/ipfs/${cid}`} target="_blank" rel="noopener noreferrer">
-                  <img
-                    src={`https://gateway.pinata.cloud/ipfs/${cid}`}
-                    alt={`Move-out ${i}`}
-                    style={{ width: "100%", height: "90px", objectFit: "cover", borderRadius: "6px" }}
-                  />
-                </a>
-              )) : <p style={{ color: COLORS.textMuted, fontSize: "12px" }}>No move-out photos.</p>}
-            </div>
-          </div>
-        </div>
-      </div> */}
 
       {status === "idle" && (
         <>
@@ -199,7 +152,13 @@ export default function HITLEscalation({
 
       {status === "submitted" && (
         <div>
-          <div className="alert alert-success" style={{ marginBottom: "16px" }}>✓ Human review requested successfully</div>
+          <div style={{
+            padding: "12px 16px", borderRadius: "8px", marginBottom: "16px",
+            background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)",
+            color: COLORS.red, fontSize: "14px",
+          }}>
+            ❌ You have rejected the AI proposal and requested human arbitration.
+          </div>
           <div style={{ background: COLORS.surface, borderRadius: "8px", padding: "14px", fontSize: "13px", display: "flex", flexDirection: "column", gap: "8px" }}>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span style={{ color: COLORS.textSecondary }}>Status</span>
