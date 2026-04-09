@@ -3,11 +3,12 @@ const { escrow, provider } = require("../provider");
 const { fetchFromIPFS, uploadToIPFS } = require("../services/ipfsService");
 const { analyzeDispute } = require("../services/llmService");
 
-// Fix 3.4: validate threshold to avoid silent NaN disabling the guard
 const _rawThreshold = parseFloat(process.env.LLM_CONFIDENCE_THRESHOLD ?? "0.80");
-const CONFIDENCE_THRESHOLD = isNaN(_rawThreshold) ? (() => { throw new Error("Invalid LLM_CONFIDENCE_THRESHOLD env var"); })() : _rawThreshold;
+const CONFIDENCE_THRESHOLD = isNaN(_rawThreshold)
+  ? (() => { throw new Error("Invalid LLM_CONFIDENCE_THRESHOLD env var"); })()
+  : _rawThreshold;
 
-// ✅ Add this set to remember processed leases
+// Tracks leases currently being processed OR already done
 const processedLeases = new Set();
 
 async function startDisputeListener() {
@@ -18,55 +19,48 @@ async function startDisputeListener() {
   setInterval(async () => {
     try {
       const currentBlock = await provider.getBlockNumber();
-      
       if (currentBlock <= lastCheckedBlock) return;
 
       const events = await escrow.queryFilter("DisputeRaised", lastCheckedBlock + 1, currentBlock);
 
       for (const event of events) {
-        const leaseId = event.args[0].toString(); // Convert to string for the Set
+        const leaseId = event.args[0].toString();
         const verifier = event.args[1];
 
-        // ✅ Check if we already processed this exact lease dispute
-        if (processedLeases.has(leaseId)) {
-          continue; // Skip it!
-        }
+        // ✅ Skip if already processing OR already done
+        if (processedLeases.has(leaseId)) continue;
+
+        // ✅ IMMEDIATELY claim this leaseId to prevent re-entry on the next poll
+        processedLeases.add(leaseId);
 
         console.log(`\n[Dispute] Lease #${leaseId} disputed. Verifier: ${verifier}`);
 
-        // Fix 3.2: add to processedLeases ONLY after successful processing
-        // so that a failure allows retry on the next poll cycle
-        try {
-          await processDispute(leaseId, verifier);
-          processedLeases.add(leaseId);
-        } catch (err) {
-          console.error(`[Dispute] Failed to process lease #${leaseId}, will retry:`, err.message);
-          // Do NOT add to processedLeases — next poll will retry
-        }
+        // Process in background — do NOT await here so the poll loop stays fast
+        processDispute(leaseId, verifier).catch((err) => {
+          console.error(`[Dispute] Failed to process lease #${leaseId}:`, err.message);
+          // ✅ Remove from set on failure so it can be retried on next poll
+          processedLeases.delete(leaseId);
+        });
       }
 
       lastCheckedBlock = currentBlock;
     } catch (err) {
       console.error("[Listener] Polling error:", err.message);
     }
-  }, 2000); 
+  }, 2000);
 
   console.log(`[Listener] Polling engine started. Current block: ${lastCheckedBlock}`);
 }
 
 async function processDispute(leaseId, verifier) {
   try {
-    // 1. Fetch lease data from contract
     const lease = await escrow.leases(leaseId);
 
-    // Fix 3.3: verify lease is still in DISPUTED state before doing any work
-    // (state 2 = DISPUTED; it may have changed since the event was emitted)
     if (lease.state !== 2n) {
       console.warn(`[Dispute] Lease #${leaseId} is no longer DISPUTED (state=${lease.state}), skipping.`);
       return;
     }
 
-    // Convert raw on-chain deposit (6 decimals) to human-readable USDC
     const depositHuman = Number(lease.depositAmount) / 1_000_000;
 
     console.log(`[Dispute] Lease data:`, {
@@ -77,7 +71,6 @@ async function processDispute(leaseId, verifier) {
       moveOutCID: lease.moveOutCID,
     });
 
-    // 2. Fetch move-in metadata from IPFS
     let moveInData = {};
     if (lease.moveInCID) {
       try {
@@ -88,7 +81,6 @@ async function processDispute(leaseId, verifier) {
       }
     }
 
-    // 3. Fetch move-out / damage claim metadata from IPFS
     let moveOutData = {};
     if (lease.moveOutCID) {
       try {
@@ -101,7 +93,6 @@ async function processDispute(leaseId, verifier) {
       console.warn(`[Dispute] No move-out CID found — ruling in tenant's favour.`);
     }
 
-    // 4. Run Gemini LLM visual analysis
     console.log(`[LLM] Running dispute analysis with photo comparison...`);
     const verdict = await analyzeDispute({
       leaseTerms: moveInData.leaseTerms || {},
@@ -109,12 +100,11 @@ async function processDispute(leaseId, verifier) {
       moveOutPhotoCIDs: moveOutData.moveOutPhotoCIDs || [],
       landlordClaim: moveOutData.landlordClaim || "Landlord claims deposit deduction for damages.",
       tenantClaim: moveInData.tenantClaim || "Tenant disputes the damage claim.",
-      depositAmount: depositHuman, 
+      depositAmount: depositHuman,
     });
 
     console.log(`[LLM] Verdict:`, verdict);
 
-    // 5. Store verdict on IPFS for audit trail
     let verdictCID = "";
     try {
       verdictCID = await uploadToIPFS(
@@ -130,12 +120,9 @@ async function processDispute(leaseId, verifier) {
       console.log(`[IPFS] Verdict stored: ${verdictCID}`);
     } catch (err) {
       console.warn(`[IPFS] Failed to store verdict: ${err.message}`);
-      // If IPFS fails, we must still have a string for the smart contract
-      verdictCID = "IPFS_UPLOAD_FAILED"; 
+      verdictCID = "IPFS_UPLOAD_FAILED";
     }
 
-    // 6. Submit verdict on-chain as a PROPOSAL
-    // Convert human USDC back to raw token units
     const amountToLandlordBN = BigInt(Math.round(verdict.amountToLandlord * 1_000_000));
 
     console.log(`[Contract] Submitting AI proposal to blockchain...`);
@@ -152,7 +139,7 @@ async function processDispute(leaseId, verifier) {
   } catch (err) {
     console.error(`[Error] processDispute for lease #${leaseId}:`, err.message);
     console.error(err.stack);
-    throw err; // Re-throw so the caller (polling loop) knows to retry
+    throw err; // Caller's .catch() will remove from processedLeases for retry
   }
 }
 
