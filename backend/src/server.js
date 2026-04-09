@@ -16,6 +16,10 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 const PORT = process.env.PORT || 3001;
 
+// ========== IN-MEMORY HITL STORE ==========
+// Replace with a database (e.g. SQLite / MongoDB) in production
+const escalations = {};
+
 function serializeLease(leaseId, lease) {
   return {
     leaseId,
@@ -39,16 +43,11 @@ app.get('/health', (req, res) => {
 });
 
 // ========== IPFS ROUTES ==========
-
 app.post('/api/ipfs/upload', upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file provided' });
-    }
-
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
     console.log(`[IPFS] Uploading file: ${req.file.originalname}`);
     const cid = await uploadToIPFS(req.file.buffer, req.file.originalname);
-
     console.log(`[IPFS] ✓ File uploaded. CID: ${cid}`);
     res.json({ cid });
   } catch (err) {
@@ -61,7 +60,6 @@ app.post('/api/ipfs/upload-metadata', express.json({ limit: '10mb' }), async (re
   try {
     console.log(`[IPFS] Uploading metadata`);
     const cid = await uploadToIPFS(req.body, 'lease-metadata.json');
-
     console.log(`[IPFS] ✓ Metadata uploaded. CID: ${cid}`);
     res.json({ cid });
   } catch (err) {
@@ -71,7 +69,6 @@ app.post('/api/ipfs/upload-metadata', express.json({ limit: '10mb' }), async (re
 });
 
 // ========== LEASE ROUTES ==========
-
 app.get('/api/leases/count', async (req, res) => {
   try {
     const count = await escrow.leaseCounter();
@@ -85,41 +82,23 @@ app.get('/api/leases/count', async (req, res) => {
 app.get('/api/leases', async (req, res) => {
   try {
     const user = req.query.user?.toLowerCase();
-    
-    // Fix 3.7: use leaseCounter to bound the loop — avoids O(n) error-based termination
     const total = Number(await escrow.leaseCounter());
     const leases = [];
     for (let currentId = 1; currentId <= total; currentId++) {
       const lease = await escrow.leases(currentId);
       leases.push(serializeLease(currentId, lease));
     }
-
     const filteredLeases = user
-      ? leases.filter(
-          (lease) =>
-            lease.landlord.toLowerCase() === user ||
-            lease.tenant.toLowerCase() === user
-        )
+      ? leases.filter(l => l.landlord.toLowerCase() === user || l.tenant.toLowerCase() === user)
       : leases;
-
-    // Sort newest first
     filteredLeases.sort((a, b) => b.leaseId - a.leaseId);
-
-    res.json({
-      totalCount: leases.length,
-      count: filteredLeases.length,
-      leases: filteredLeases,
-    });
+    res.json({ totalCount: leases.length, count: filteredLeases.length, leases: filteredLeases });
   } catch (err) {
     console.error('[Error] GET /api/leases', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-/**
- * GET /api/leases/:id
- * Fetch a lease by ID from the blockchain
- */
 app.get('/api/leases/:id', async (req, res) => {
   try {
     const lease = await escrow.leases(req.params.id);
@@ -144,43 +123,91 @@ app.get('/api/leases/:id', async (req, res) => {
 });
 
 // ========== DISPUTE ANALYSIS (X402 GATED) ==========
-
 app.post('/api/disputes/analyze', async (req, res) => {
   try {
     const proof = req.headers['x-payment-proof'];
     const nonce = req.headers['x-payment-nonce'];
-
     if (!proof || !nonce) {
       const challenge = createPaymentChallenge(req.body.leaseId);
-      return res.status(402).json({
-        message: "Payment Required for LLM Inference",
-        ...challenge,
-      });
+      return res.status(402).json({ message: "Payment Required for LLM Inference", ...challenge });
     }
-
     const isValid = await verifyPayment(nonce, proof);
-    if (!isValid) {
-      return res.status(402).json({ message: "Payment verification failed" });
-    }
-
-    res.json({
-      message: "Payment accepted. Dispute analysis will resolve on-chain.",
-      leaseId: req.body.leaseId,
-    });
+    if (!isValid) return res.status(402).json({ message: "Payment verification failed" });
+    res.json({ message: "Payment accepted. Dispute analysis will resolve on-chain.", leaseId: req.body.leaseId });
   } catch (err) {
     console.error('[Error] POST /api/disputes/analyze', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ========== STARTUP ==========
+// ========== HITL ESCALATION ROUTES ==========
 
+// POST /api/disputes/:leaseId/escalate — tenant or landlord contests AI verdict
+app.post('/api/disputes/:leaseId/escalate', (req, res) => {
+  const { leaseId } = req.params;
+  const { contestedBy, role, statement, timestamp } = req.body;
+
+  if (!contestedBy || !role) {
+    return res.status(400).json({ error: 'contestedBy and role are required' });
+  }
+
+  escalations[leaseId] = {
+    leaseId,
+    contestedBy,
+    role,
+    statement: statement || null,
+    timestamp: timestamp || new Date().toISOString(),
+    status: 'pending',
+    escalated: true,
+  };
+
+  console.log(`[HITL] ⚖️  Dispute escalated for lease #${leaseId} by ${role} (${contestedBy})`);
+  // TODO: add email/Telegram notification to verifier here
+
+  res.json(escalations[leaseId]);
+});
+
+// GET /api/disputes/:leaseId/escalation-status — check if a lease has been escalated
+app.get('/api/disputes/:leaseId/escalation-status', (req, res) => {
+  const { leaseId } = req.params;
+  const data = escalations[leaseId];
+  if (!data) return res.json({ escalated: false });
+  res.json(data);
+});
+
+// GET /api/disputes/all — admin panel fetches all escalated disputes
+// NOTE: this route must be defined BEFORE /api/disputes/:leaseId to avoid conflict
+app.get('/api/disputes/all', (req, res) => {
+  res.json({ disputes: Object.values(escalations) });
+});
+
+// POST /api/disputes/:leaseId/resolve — admin marks dispute as resolved after on-chain tx
+app.post('/api/disputes/:leaseId/resolve', (req, res) => {
+  const { leaseId } = req.params;
+  const { resolvedBy, txHash, amountToLandlord } = req.body;
+
+  if (!escalations[leaseId]) {
+    return res.status(404).json({ error: `No escalation found for lease #${leaseId}` });
+  }
+
+  escalations[leaseId] = {
+    ...escalations[leaseId],
+    status: 'resolved',
+    resolvedBy,
+    txHash,
+    amountToLandlord,
+    resolvedAt: new Date().toISOString(),
+  };
+
+  console.log(`[HITL] ✓ Dispute for lease #${leaseId} resolved by ${resolvedBy}`);
+  res.json(escalations[leaseId]);
+});
+
+// ========== STARTUP ==========
 app.listen(PORT, async () => {
   console.log(`\n✓ Server listening on port ${PORT}`);
   console.log('Initializing blockchain event listeners...\n');
-
   try {
-    // Fix 3.5: await both async functions so startup errors are caught and crash the process
     await startLeaseListeners();
     await startDisputeListener();
     console.log('✓ Event listeners initialized\n');

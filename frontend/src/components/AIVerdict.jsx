@@ -218,7 +218,7 @@ export default function AIVerdict({ leaseId, escrowDetails }) {
             ) : "Accept Proposal"}
           </button>
           
-          <button 
+          {/* <button 
             className="btn-ghost" 
             onClick={handleEscalate} 
             disabled={isEscalatePending || isEscalateConfirming} 
@@ -227,7 +227,7 @@ export default function AIVerdict({ leaseId, escrowDetails }) {
             {isEscalatePending || isEscalateConfirming ? (
               <><span className="spinner" style={{ borderTopColor: "#EF4444" }}></span> Escalating...</>
             ) : "Reject & Escalate"}
-          </button>
+          </button> */}
         </div>
       )}
     </div>

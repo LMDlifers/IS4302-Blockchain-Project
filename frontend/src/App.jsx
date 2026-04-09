@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useAccount, useConnect, useDisconnect, usePublicClient, useChainId } from "wagmi";
 import { injected } from "wagmi/connectors";
 import AIVerdict from "./components/AIVerdict";
+import AdminPanel from "./components/AdminPanel";
+import HITLEscalation from "./components/HITLEscalation";
 import {
   useInitializeLease,
   useApproveUSDC,
@@ -207,9 +209,20 @@ const css = `
     border: 1px solid rgba(59,130,246,0.2);
     color: ${COLORS.blue};
   }
+
+  .nav-tab {
+    padding: 8px 20px;
+    border-radius: 8px;
+    border: 1px solid ${COLORS.border};
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
 `;
 
-// ========== NAVBAR COMPONENT ==========
+// ========== NAVBAR ==========
 function Navbar() {
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
@@ -222,11 +235,11 @@ function Navbar() {
       disconnect();
     } else {
       if (connectors.length > 0) {
-        const connector = connectors.find(c => c.id === 'injected') || connectors[0];
+        const connector = connectors.find(c => c.id === "injected") || connectors[0];
         try {
           await connect({ connector });
         } catch (err) {
-          if (err.message?.includes('chain') || err.name === 'ChainNotConfiguredError') {
+          if (err.message?.includes("chain") || err.name === "ChainNotConfiguredError") {
             alert("Wrong network detected. Switch MetaMask to Hardhat (Chain ID: 1337, RPC: http://127.0.0.1:8545).");
           } else {
             console.error("Connection failed:", err);
@@ -254,11 +267,7 @@ function Navbar() {
               Disconnect
             </button>
           )}
-          <button
-            className="btn-primary btn-sm"
-            onClick={handleConnect}
-            style={{ cursor: "pointer" }}
-          >
+          <button className="btn-primary btn-sm" onClick={handleConnect} style={{ cursor: "pointer" }}>
             {isConnected ? `${address?.slice(0, 6)}...${address?.slice(-4)}` : "Connect Wallet"}
           </button>
         </div>
@@ -272,8 +281,8 @@ function Navbar() {
   );
 }
 
-// ========== CREATE ESCROW COMPONENT ==========
-function CreateEscrow({ onSuccess }) {
+// ========== CREATE ESCROW ==========
+function CreateEscrow({ onSuccess, onBack }) {
   const { address } = useAccount();
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
@@ -283,7 +292,6 @@ function CreateEscrow({ onSuccess }) {
     gracePeriodDays: "7",
     moveInCID: "",
   });
-  // Each item: { cid: string, name: string }
   const [moveInPhotoCIDs, setMoveInPhotoCIDs] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
@@ -298,17 +306,13 @@ function CreateEscrow({ onSuccess }) {
     if (files.length === 0) return;
     setUploading(true);
     setError("");
-
     try {
       const cids = [];
       for (const file of files) {
         const fd = new FormData();
         fd.append("file", file);
         try {
-          const res = await fetch("http://localhost:3001/api/ipfs/upload", {
-            method: "POST",
-            body: fd,
-          });
+          const res = await fetch("http://localhost:3001/api/ipfs/upload", { method: "POST", body: fd });
           if (!res.ok) throw new Error("Server error");
           const data = await res.json();
           cids.push({ cid: data.cid, name: file.name });
@@ -325,35 +329,33 @@ function CreateEscrow({ onSuccess }) {
     }
   };
 
+  const formatDeadline = (value) => {
+    const digits = value.replace(/\D/g, "").slice(0, 8);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+    return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+  };
+
   const handleCreateLease = async () => {
     if (!formData.tenantAddress || !formData.depositAmount || !formData.deadline || !formData.moveInCID) {
       setError("Please fill all fields and upload move-in photos");
       return;
     }
-
-    const [dd, mm, yyyy] = formData.deadline.split("/");
+    const dd = formData.deadline.slice(0, 2);
+    const mm = formData.deadline.slice(2, 4);
+    const yyyy = formData.deadline.slice(4, 8);
     const deadline = Math.floor(new Date(`${yyyy}-${mm}-${dd}`).getTime() / 1000);
     if (isNaN(deadline)) { setError("Invalid lease deadline date. Use dd/mm/yyyy format."); return; }
-
     const gracePeriod = parseInt(formData.gracePeriodDays) * 24 * 60 * 60;
     const depositAmount = parseFloat(formData.depositAmount);
     const stakeAmount = depositAmount / 5;
-
     try {
       setSuccess("Step 1 of 2: Approving USDC stake... (confirm in MetaMask)");
       const approveTxHash = await approveStake(stakeAmount);
       setSuccess("Step 1 of 2: Waiting for approval confirmation...");
       await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
-
       setSuccess("Step 2 of 2: Creating lease... (confirm in MetaMask)");
-      await initializeLease(
-        formData.tenantAddress,
-        depositAmount,
-        deadline,
-        gracePeriod,
-        formData.moveInCID,
-      );
-
+      await initializeLease(formData.tenantAddress, depositAmount, deadline, gracePeriod, formData.moveInCID);
       setSuccess("✓ Lease created! Awaiting confirmation...");
       setTimeout(() => onSuccess?.(), 2000);
     } catch (err) {
@@ -361,60 +363,53 @@ function CreateEscrow({ onSuccess }) {
     }
   };
 
-  return (
+    return (
     <div style={{ padding: "40px", maxWidth: "600px" }}>
-      <h2 style={{ marginBottom: "30px" }}>Create New Escrow</h2>
-
+      <button
+        onClick={onBack}
+        style={{
+          background: "transparent",
+          border: `1px solid ${COLORS.border}`,
+          color: COLORS.textSecondary,
+          padding: "6px 14px",
+          borderRadius: "6px",
+          fontSize: "13px",
+          cursor: "pointer",
+          marginBottom: "20px",
+          fontFamily: "'Space Grotesk', sans-serif",
+        }}
+      >
+        ← Back
+      </button>
       {error && <div className="alert alert-error">⚠️ {error}</div>}
       {success && <div className="alert alert-success">✓ {success}</div>}
 
       {step === 1 && (
         <div className="card">
           <h3 style={{ marginBottom: "20px" }}>Step 1: Lease Details</h3>
-
-          <input
-            className="input-field"
-            placeholder="Tenant address (0x...)"
-            value={formData.tenantAddress}
-            onChange={(e) => setFormData({ ...formData, tenantAddress: e.target.value })}
-            style={{ marginBottom: "12px" }}
-          />
-
-          <input
-            className="input-field"
-            placeholder="Deposit amount (USDC)"
-            type="number"
-            value={formData.depositAmount}
-            onChange={(e) => setFormData({ ...formData, depositAmount: e.target.value })}
-            style={{ marginBottom: "12px" }}
-          />
-
+          <input className="input-field" placeholder="Tenant address (0x...)" value={formData.tenantAddress}
+            onChange={(e) => setFormData({ ...formData, tenantAddress: e.target.value })} style={{ marginBottom: "12px" }} />
+          <input className="input-field" placeholder="Deposit amount (USDC)" type="number" value={formData.depositAmount}
+            onChange={(e) => setFormData({ ...formData, depositAmount: e.target.value })} style={{ marginBottom: "12px" }} />
           <div style={{ marginBottom: "12px" }}>
-            <label style={{ display: "block", fontSize: "13px", color: COLORS.textSecondary, marginBottom: "6px" }}>
-              Lease Deadline
-            </label>
+            <label style={{ display: "block", fontSize: "13px", color: COLORS.textSecondary, marginBottom: "6px" }}>Lease Deadline</label>
             <input
               className="input-field"
               type="text"
+              inputMode="numeric"
               placeholder="dd/mm/yyyy"
-              value={formData.deadline}
-              onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
-            />
+              value={formatDeadline(formData.deadline)}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, "").slice(0, 8);
+                setFormData({ ...formData, deadline: digits });
+              }}
+            />  
           </div>
-
           <div style={{ marginBottom: "20px" }}>
-            <label style={{ display: "block", fontSize: "13px", color: COLORS.textSecondary, marginBottom: "6px" }}>
-              Grace Period (days)
-            </label>
-            <input
-              className="input-field"
-              type="number"
-              min="1"
-              value={formData.gracePeriodDays}
-              onChange={(e) => setFormData({ ...formData, gracePeriodDays: e.target.value })}
-            />
+            <label style={{ display: "block", fontSize: "13px", color: COLORS.textSecondary, marginBottom: "6px" }}>Grace Period (days)</label>
+            <input className="input-field" type="number" min="1" value={formData.gracePeriodDays}
+              onChange={(e) => setFormData({ ...formData, gracePeriodDays: e.target.value })} />
           </div>
-
           <button className="btn-primary" onClick={() => setStep(2)}>Next: Move-In Photos</button>
         </div>
       )}
@@ -426,66 +421,36 @@ function CreateEscrow({ onSuccess }) {
             Upload photos of every room and item in the rental unit <strong>before the tenant moves in</strong>.
             These serve as the baseline for any future damage claims.
           </p>
-          <div style={{
-            border: `2px dashed ${COLORS.border}`, borderRadius: "8px", padding: "24px",
-            textAlign: "center", marginBottom: "16px", cursor: "pointer"
-          }}>
+          <div style={{ border: `2px dashed ${COLORS.border}`, borderRadius: "8px", padding: "24px", textAlign: "center", marginBottom: "16px", cursor: "pointer" }}>
             <p style={{ color: COLORS.textMuted, fontSize: "13px", marginBottom: "12px" }}>
               📸 Recommended: bedroom, living room, kitchen, bathroom, appliances, walls, flooring
             </p>
             <label style={{ cursor: "pointer" }}>
-              <input type="file" multiple accept="image/*" onChange={handleMoveInUpload}
-                disabled={uploading} style={{ display: "none" }} />
+              <input type="file" multiple accept="image/*" onChange={handleMoveInUpload} disabled={uploading} style={{ display: "none" }} />
               <span className="btn-primary btn-sm" style={{ display: "inline-flex" }}>
                 {uploading ? <span className="spinner"></span> : "Select Photos"}
               </span>
             </label>
           </div>
-
           {moveInPhotoCIDs.length > 0 && (
             <div style={{ marginBottom: "16px", padding: "12px", background: COLORS.surface, borderRadius: "8px" }}>
               <p style={{ fontSize: "12px", color: COLORS.accent, marginBottom: "8px" }}>
                 ✓ {moveInPhotoCIDs.length} move-in photo(s) uploaded to IPFS
               </p>
               {moveInPhotoCIDs.map((item, i) => (
-                <div key={i} style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "8px",
-                  marginBottom: "6px",
-                  padding: "6px 8px",
-                  background: COLORS.card,
-                  borderRadius: "6px",
-                }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "6px", padding: "6px 8px", background: COLORS.card, borderRadius: "6px" }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: "12px", color: COLORS.textPrimary, marginBottom: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      📄 {item.name}
-                    </div>
-                    <div style={{ fontSize: "10px", color: COLORS.textMuted, wordBreak: "break-all" }}>
-                      {item.cid}
-                    </div>
+                    <div style={{ fontSize: "12px", color: COLORS.textPrimary, marginBottom: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📄 {item.name}</div>
+                    <div style={{ fontSize: "10px", color: COLORS.textMuted, wordBreak: "break-all" }}>{item.cid}</div>
                   </div>
-                  <button
-                    onClick={() => setMoveInPhotoCIDs(prev => prev.filter((_, idx) => idx !== i))}
-                    style={{
-                      background: "rgba(239,68,68,0.15)",
-                      border: "1px solid rgba(239,68,68,0.3)",
-                      color: "#EF4444",
-                      borderRadius: "4px",
-                      padding: "2px 8px",
-                      fontSize: "11px",
-                      cursor: "pointer",
-                      flexShrink: 0,
-                    }}
-                  >
+                  <button onClick={() => setMoveInPhotoCIDs(prev => prev.filter((_, idx) => idx !== i))}
+                    style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#EF4444", borderRadius: "4px", padding: "2px 8px", fontSize: "11px", cursor: "pointer", flexShrink: 0 }}>
                     ✕ Remove
                   </button>
                 </div>
               ))}
             </div>
           )}
-
           <div style={{ display: "flex", gap: "12px" }}>
             <button className="btn-ghost" onClick={() => setStep(1)} style={{ flex: 1 }}>Back</button>
             <button className="btn-primary" style={{ flex: 1 }} onClick={async () => {
@@ -497,24 +462,13 @@ function CreateEscrow({ onSuccess }) {
               setUploading(true);
               try {
                 const metadataRes = await fetch("http://localhost:3001/api/ipfs/upload-metadata", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    moveInPhotoCIDs: cids.map(item => item.cid),
-                    leaseTerms: {
-                      tenantAddress: formData.tenantAddress,
-                      depositAmount: formData.depositAmount,
-                      deadline: formData.deadline,
-                    },
-                    uploadedAt: new Date().toISOString(),
-                    type: "move-in",
-                  }),
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ moveInPhotoCIDs: cids.map(item => item.cid), leaseTerms: { tenantAddress: formData.tenantAddress, depositAmount: formData.depositAmount, deadline: formData.deadline }, uploadedAt: new Date().toISOString(), type: "move-in" }),
                 });
                 const metadataData = metadataRes.ok ? await metadataRes.json() : { cid: "QmDemoMetaFallback" + Math.floor(Math.random() * 9999) };
                 setFormData(prev => ({ ...prev, moveInCID: metadataData.cid }));
               } catch {
-                const demoCid = "QmDemoMetaFallback" + Math.floor(Math.random() * 9999);
-                setFormData(prev => ({ ...prev, moveInCID: demoCid }));
+                setFormData(prev => ({ ...prev, moveInCID: "QmDemoMetaFallback" + Math.floor(Math.random() * 9999) }));
               } finally {
                 setUploading(false);
                 setStep(3);
@@ -530,25 +484,12 @@ function CreateEscrow({ onSuccess }) {
         <div className="card">
           <h3 style={{ marginBottom: "20px" }}>Step 3: Review & Deploy</h3>
           <div style={{ background: COLORS.surface, padding: "16px", borderRadius: "8px", marginBottom: "20px", fontSize: "14px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-              <span>Tenant:</span><span className="mono">{formData.tenantAddress?.slice(0, 10)}...</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-              <span>Deposit:</span><span>{formData.depositAmount} USDC</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-              <span>Your Stake:</span><span>{(parseFloat(formData.depositAmount) / 5 || 0).toFixed(2)} USDC (20%)</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-              <span>Deadline:</span><span>{formData.deadline}</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
-              <span>Grace Period:</span><span>{formData.gracePeriodDays} days after deadline</span>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span>Move-In Photos:</span>
-              <span style={{ color: COLORS.accent }}>{moveInPhotoCIDs.length} photo(s) ✓</span>
-            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Tenant:</span><span className="mono">{formData.tenantAddress?.slice(0, 10)}...</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Deposit:</span><span>{formData.depositAmount} USDC</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Your Stake:</span><span>{(parseFloat(formData.depositAmount) / 5 || 0).toFixed(2)} USDC (20%)</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Deadline:</span><span>{formData.deadline}</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Grace Period:</span><span>{formData.gracePeriodDays} days after deadline</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span>Move-In Photos:</span><span style={{ color: COLORS.accent }}>{moveInPhotoCIDs.length} photo(s) ✓</span></div>
           </div>
           <p style={{ color: COLORS.textSecondary, marginBottom: "20px", fontSize: "13px" }}>
             Move-in photos are locked on IPFS as the baseline evidence for any future damage disputes.
@@ -563,7 +504,7 @@ function CreateEscrow({ onSuccess }) {
   );
 }
 
-// ========== ESCROW DETAIL COMPONENT ==========
+// ========== ESCROW DETAIL ==========
 function EscrowDetail({ leaseId, onBack }) {
   const { address } = useAccount();
   const { data: lease, refetch, isError, isLoading } = useLease(BigInt(leaseId));
@@ -587,17 +528,9 @@ function EscrowDetail({ leaseId, onBack }) {
   const [loadingPhotos, setLoadingPhotos] = useState(false);
 
   const [
-    landlordRaw,
-    tenantRaw,
-    verifierRaw,
-    depositAmountRaw,
-    landlordStakeRaw,
-    deadlineRaw,
-    gracePeriodRaw,
-    moveInCIDRaw,
-    moveOutCIDRaw,
-    stateRaw,
-    amountToLandlordRaw
+    landlordRaw, tenantRaw, verifierRaw,
+    depositAmountRaw, landlordStakeRaw, deadlineRaw, gracePeriodRaw,
+    moveInCIDRaw, moveOutCIDRaw, stateRaw, amountToLandlordRaw
   ] = lease || [];
 
   const displayDeposit = Number(depositAmountRaw || 0) / 1_000_000;
@@ -615,11 +548,7 @@ function EscrowDetail({ leaseId, onBack }) {
           fetchPromises.push(
             fetch(`https://gateway.pinata.cloud/ipfs/${moveInCIDRaw}`)
               .then(res => res.json())
-              .then(metadata => {
-                if (metadata.moveInPhotoCIDs && Array.isArray(metadata.moveInPhotoCIDs)) {
-                  setMoveInPhotos(metadata.moveInPhotoCIDs);
-                }
-              })
+              .then(metadata => { if (metadata.moveInPhotoCIDs && Array.isArray(metadata.moveInPhotoCIDs)) setMoveInPhotos(metadata.moveInPhotoCIDs); })
               .catch(err => console.error("Move-in IPFS error:", err))
           );
         }
@@ -627,20 +556,13 @@ function EscrowDetail({ leaseId, onBack }) {
           fetchPromises.push(
             fetch(`https://gateway.pinata.cloud/ipfs/${moveOutCIDRaw}`)
               .then(res => res.json())
-              .then(metadata => {
-                if (metadata.moveOutPhotoCIDs && Array.isArray(metadata.moveOutPhotoCIDs)) {
-                  setMoveOutPhotos(metadata.moveOutPhotoCIDs);
-                }
-              })
+              .then(metadata => { if (metadata.moveOutPhotoCIDs && Array.isArray(metadata.moveOutPhotoCIDs)) setMoveOutPhotos(metadata.moveOutPhotoCIDs); })
               .catch(err => console.error("Move-out IPFS error:", err))
           );
         }
         await Promise.all(fetchPromises);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoadingPhotos(false);
-      }
+      } catch (err) { console.error(err); }
+      finally { setLoadingPhotos(false); }
     }
     if (lease) fetchEvidence();
   }, [lease, moveInCIDRaw, moveOutCIDRaw]);
@@ -668,7 +590,7 @@ function EscrowDetail({ leaseId, onBack }) {
     finally { setTxPending(false); }
   };
 
- const handleDamagePhotoUpload = async (e) => {
+  const handleDamagePhotoUpload = async (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
     setDamageUploading(true);
@@ -746,56 +668,36 @@ function EscrowDetail({ leaseId, onBack }) {
           <div style={{ border: `2px dashed ${COLORS.border}`, borderRadius: "8px", padding: "16px", textAlign: "center", marginBottom: "12px" }}>
             <label style={{ cursor: "pointer" }}>
               <input type="file" multiple accept="image/*" onChange={handleDamagePhotoUpload} disabled={damageUploading} style={{ display: "none" }} />
-              <span className="btn-ghost btn-sm" style={{ display: "inline-flex" }}>{damageUploading ? <span className="spinner"></span> : "📷 Upload Damage Photos"}</span>
+              <span className="btn-ghost btn-sm" style={{ display: "inline-flex" }}>
+                {damageUploading ? <span className="spinner"></span> : "📷 Upload Damage Photos"}
+              </span>
             </label>
           </div>
           {damagePhotoCIDs.length > 0 && (
             <div style={{ marginBottom: "12px" }}>
-              <p style={{ fontSize: "12px", color: COLORS.accent, marginBottom: "8px" }}>
-                ✓ {damagePhotoCIDs.length} photo(s) ready
-              </p>
-                {damagePhotoCIDs.map((item, i) => (
-                  <div key={i} style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: "8px",
-                    marginBottom: "6px",
-                    padding: "6px 8px",
-                    background: COLORS.surface,
-                    borderRadius: "6px",
-                  }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: "12px", color: COLORS.textPrimary, marginBottom: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        📄 {item.name}
-                      </div>
-                      <div style={{ fontSize: "10px", color: COLORS.textMuted, wordBreak: "break-all" }}>
-                        {item.cid}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setDamagePhotoCIDs(prev => prev.filter((_, idx) => idx !== i))}
-                      style={{
-                        background: "rgba(239,68,68,0.15)",
-                        border: "1px solid rgba(239,68,68,0.3)",
-                        color: "#EF4444",
-                        borderRadius: "4px",
-                        padding: "2px 8px",
-                        fontSize: "11px",
-                        cursor: "pointer",
-                        flexShrink: 0,
-                      }}
-                    >
-                      ✕ Remove
-                    </button>
+              <p style={{ fontSize: "12px", color: COLORS.accent, marginBottom: "8px" }}>✓ {damagePhotoCIDs.length} photo(s) ready</p>
+              {damagePhotoCIDs.map((item, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "6px", padding: "6px 8px", background: COLORS.surface, borderRadius: "6px" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: "12px", color: COLORS.textPrimary, marginBottom: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📄 {item.name}</div>
+                    <div style={{ fontSize: "10px", color: COLORS.textMuted, wordBreak: "break-all" }}>{item.cid}</div>
                   </div>
-                ))}
-              </div>
-            )}
-          <textarea className="input-field" placeholder="Describe the damage" value={damageDescription} onChange={(e) => setDamageDescription(e.target.value)} rows={2} style={{ marginBottom: "12px", resize: "vertical" }} />
+                  <button onClick={() => setDamagePhotoCIDs(prev => prev.filter((_, idx) => idx !== i))}
+                    style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#EF4444", borderRadius: "4px", padding: "2px 8px", fontSize: "11px", cursor: "pointer", flexShrink: 0 }}>
+                    ✕ Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <textarea className="input-field" placeholder="Describe the damage" value={damageDescription}
+            onChange={(e) => setDamageDescription(e.target.value)} rows={2} style={{ marginBottom: "12px", resize: "vertical" }} />
           <div style={{ display: "flex", gap: "12px" }}>
-            <input className="input-field" type="number" placeholder="Amount to keep (USDC)" value={proposedAmountInput} onChange={(e) => setProposedAmountInput(e.target.value)} style={{ flex: 1 }} />
-            <button className="btn-primary" onClick={handlePropose} disabled={txPending}>{txPending ? <span className="spinner"></span> : "Propose"}</button>
+            <input className="input-field" type="number" placeholder="Amount to keep (USDC)" value={proposedAmountInput}
+              onChange={(e) => setProposedAmountInput(e.target.value)} style={{ flex: 1 }} />
+            <button className="btn-primary" onClick={handlePropose} disabled={txPending}>
+              {txPending ? <span className="spinner"></span> : "Propose"}
+            </button>
           </div>
         </div>
       )}
@@ -819,12 +721,12 @@ function EscrowDetail({ leaseId, onBack }) {
       {isTenant && stateIndex === 1 && moveOutCIDRaw !== "" && (
         <div className="card" style={{ marginBottom: "20px", background: `${COLORS.blue}15` }}>
           <h3 style={{ marginBottom: "16px", color: COLORS.blue }}>Review Landlord's Proposal</h3>
-          <div style={{ marginBottom: "20px", padding: "16px", background: "rgba(0, 0, 0, 0.2)", borderRadius: "8px", border: `1px solid ${COLORS.blue}` }}>
+          <div style={{ marginBottom: "20px", padding: "16px", background: "rgba(0,0,0,0.2)", borderRadius: "8px", border: `1px solid ${COLORS.blue}` }}>
             <h4 style={{ marginBottom: "12px", color: COLORS.blue }}>Proposed Split</h4>
             <p style={{ marginBottom: "8px", color: COLORS.textPrimary }}><strong>Landlord keeps:</strong> {proposedLandlordAmount.toFixed(2)} USDC</p>
             <p style={{ color: COLORS.textPrimary }}><strong>Your refund:</strong> {tenantRefundAmount.toFixed(2)} USDC</p>
           </div>
-          <p style={{ marginBottom: "16px", fontSize: "14px" }}>Review the evidence gallery below. You can either accept the proposal to finalize the escrow, or raise a dispute.</p>
+          <p style={{ marginBottom: "16px", fontSize: "14px" }}>Review the evidence gallery below. Accept the proposal to finalize, or raise a dispute.</p>
           <div style={{ display: "flex", gap: "12px" }}>
             <button className="btn-primary" onClick={async () => {
               try { setTxPending(true); await accept(leaseId); setSuccess("✓ Proposal accepted!"); setTimeout(() => refetch(), 2000); }
@@ -863,7 +765,7 @@ function EscrowDetail({ leaseId, onBack }) {
                   </div>
                 ) : <p style={{ fontSize: "12px", color: COLORS.textSecondary }}>No baseline photos found.</p>}
               </div>
-              <div style={{ background: "rgba(255,0,0,0.05)", padding: "12px", borderRadius: "8px", border: `1px solid rgba(255,0,0,0.1)` }}>
+              <div style={{ background: "rgba(255,0,0,0.05)", padding: "12px", borderRadius: "8px", border: "1px solid rgba(255,0,0,0.1)" }}>
                 <p style={{ fontSize: "13px", color: COLORS.red, marginBottom: "12px", fontWeight: "bold" }}>Move-out (Damages)</p>
                 {moveOutPhotos.length > 0 ? (
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: "8px" }}>
@@ -879,19 +781,27 @@ function EscrowDetail({ leaseId, onBack }) {
           )}
         </div>
       )}
-      <div>
-        {Number(stateIndex) === 2 && (
-          <AIVerdict
+
+      {/* AI Verdict + HITL Escalation — only shown in DISPUTED state */}
+      {stateIndex === 2 && (
+        <>
+          <AIVerdict leaseId={leaseId} escrowDetails={lease} />
+          <HITLEscalation
             leaseId={leaseId}
+            isLandlord={isLandlord}
+            isTenant={isTenant}
+            address={address}
             escrowDetails={lease}
+            moveInPhotos={moveInPhotos}
+            moveOutPhotos={moveOutPhotos}
           />
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }
 
-// ========== DASHBOARD COMPONENT ==========
+// ========== DASHBOARD ==========
 function Dashboard() {
   const { address, isConnected } = useAccount();
   const [activeTab, setActiveTab] = useState("overview");
@@ -907,12 +817,8 @@ function Dashboard() {
     setLoadingLeases(true);
     setLeaseLoadError("");
     try {
-      const res = await fetch(
-        `http://localhost:3001/api/leases?user=${encodeURIComponent(address)}`
-      );
-      if (!res.ok) {
-        throw new Error(`Failed to load escrows (${res.status})`);
-      }
+      const res = await fetch(`http://localhost:3001/api/leases?user=${encodeURIComponent(address)}`);
+      if (!res.ok) throw new Error(`Failed to load escrows (${res.status})`);
       const data = await res.json();
       setMyLeases(data.leases || []);
     } catch (err) {
@@ -931,11 +837,7 @@ function Dashboard() {
     loadMyLeases();
   }, [isConnected, activeTab, address]);
 
-  const formatUSDC = (raw) => {
-    const value = Number(raw || 0);
-    return (value / 1_000_000).toFixed(2);
-  };
-
+  const formatUSDC = (raw) => (Number(raw || 0) / 1_000_000).toFixed(2);
   const formatDate = (raw) => {
     const ts = Number(raw || 0);
     if (!ts) return "-";
@@ -956,7 +858,11 @@ function Dashboard() {
   }
 
   if (activeTab === "create") {
-    return <CreateEscrow onSuccess={() => setActiveTab("escrows")} />;
+    return <CreateEscrow onSuccess={() => setActiveTab("escrows")} onBack={() => setActiveTab("overview")} />;
+  }
+
+  if (activeTab === "admin") {
+    return <AdminPanel onBack={() => setActiveTab("overview")} />;
   }
 
   return (
@@ -964,36 +870,17 @@ function Dashboard() {
       <h2 style={{ marginBottom: "30px" }}>Dashboard</h2>
 
       <div style={{ display: "flex", gap: "12px", marginBottom: "30px" }}>
-        <button
-          className={`nav-tab ${activeTab === "overview" ? "active" : ""}`}
-          onClick={() => setActiveTab("overview")}
-          style={{
-            background: activeTab === "overview" ? COLORS.accent : "transparent",
-            color: activeTab === "overview" ? "#000" : COLORS.textSecondary,
-          }}
-        >
-          Overview
-        </button>
-        <button
-          className={`nav-tab ${activeTab === "escrows" ? "active" : ""}`}
-          onClick={() => setActiveTab("escrows")}
-          style={{
-            background: activeTab === "escrows" ? COLORS.accent : "transparent",
-            color: activeTab === "escrows" ? "#000" : COLORS.textSecondary,
-          }}
-        >
-          My Escrows
-        </button>
-        <button
-          className={`nav-tab ${activeTab === "create" ? "active" : ""}`}
-          onClick={() => setActiveTab("create")}
-          style={{
-            background: activeTab === "create" ? COLORS.accent : "transparent",
-            color: activeTab === "create" ? "#000" : COLORS.textSecondary,
-          }}
-        >
-          Create New
-        </button>
+        {[
+          { key: "overview", label: "Overview" },
+          { key: "escrows", label: "My Escrows" },
+          { key: "create", label: "Create New" },
+          { key: "admin", label: "⚖️ Admin" },
+        ].map(({ key, label }) => (
+          <button key={key} className="nav-tab" onClick={() => setActiveTab(key)}
+            style={{ background: activeTab === key ? (key === "admin" ? COLORS.orange : COLORS.accent) : "transparent", color: activeTab === key ? "#000" : COLORS.textSecondary }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {activeTab === "overview" && (
@@ -1004,9 +891,7 @@ function Dashboard() {
           </div>
           <div className="card">
             <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "8px" }}>Connected As</p>
-            <p style={{ fontSize: "14px", fontWeight: "700", color: COLORS.accent }}>
-              {address?.slice(0, 6)}...{address?.slice(-4)}
-            </p>
+            <p style={{ fontSize: "14px", fontWeight: "700", color: COLORS.accent }}>{address?.slice(0, 6)}...{address?.slice(-4)}</p>
           </div>
           <div className="card">
             <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "8px" }}>Network</p>
@@ -1021,23 +906,13 @@ function Dashboard() {
             <h3>Your Escrows</h3>
             <button className="btn-ghost btn-sm" onClick={loadMyLeases}>Refresh</button>
           </div>
-
-          {leaseLoadError && (
-            <div className="alert alert-error" style={{ marginBottom: "20px" }}>
-              ⚠️ {leaseLoadError}
-            </div>
-          )}
-
+          {leaseLoadError && <div className="alert alert-error" style={{ marginBottom: "20px" }}>⚠️ {leaseLoadError}</div>}
           {loadingLeases ? (
-            <div style={{ textAlign: "center", padding: "40px", color: COLORS.textSecondary }}>
-              Loading escrows...
-            </div>
+            <div style={{ textAlign: "center", padding: "40px", color: COLORS.textSecondary }}>Loading escrows...</div>
           ) : myLeases.length === 0 ? (
             <div style={{ marginTop: "20px", textAlign: "center", padding: "40px" }}>
               <p style={{ color: COLORS.textSecondary, marginBottom: "20px" }}>No active escrows found.</p>
-              <button className="btn-primary btn-sm" onClick={() => setActiveTab("create")}>
-                Create Your First Escrow
-              </button>
+              <button className="btn-primary btn-sm" onClick={() => setActiveTab("create")}>Create Your First Escrow</button>
             </div>
           ) : (
             <div style={{ display: "grid", gap: "14px" }}>
@@ -1045,51 +920,21 @@ function Dashboard() {
                 const stateIndex = parseInt(lease.state || 0, 10);
                 const state = stateNames[stateIndex] || "UNKNOWN";
                 const role = lease.landlord.toLowerCase() === address?.toLowerCase() ? "Landlord" : "Tenant";
-
                 return (
-                  <button
-                    key={lease.leaseId}
-                    onClick={() => setSelectedLeaseId(lease.leaseId)}
-                    style={{
-                      background: COLORS.surface,
-                      border: `1px solid ${COLORS.border}`,
-                      borderRadius: "12px",
-                      padding: "18px",
-                      textAlign: "left",
-                      color: COLORS.textPrimary,
-                      cursor: "pointer",
-                    }}
-                  >
+                  <button key={lease.leaseId} onClick={() => setSelectedLeaseId(lease.leaseId)}
+                    style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: "12px", padding: "18px", textAlign: "left", color: COLORS.textPrimary, cursor: "pointer" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", marginBottom: "12px" }}>
                       <div>
-                        <div style={{ fontSize: "18px", fontWeight: "700", marginBottom: "6px" }}>
-                          Escrow #{lease.leaseId}
-                        </div>
-                        <div style={{ color: COLORS.textSecondary, fontSize: "13px" }}>
-                          Role: {role}
-                        </div>
+                        <div style={{ fontSize: "18px", fontWeight: "700", marginBottom: "6px" }}>Escrow #{lease.leaseId}</div>
+                        <div style={{ color: COLORS.textSecondary, fontSize: "13px" }}>Role: {role}</div>
                       </div>
                       <span className={`status-badge status-${state.toLowerCase()}`}>{state}</span>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "12px", fontSize: "14px" }}>
-                      <div>
-                        <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "4px" }}>Deposit</p>
-                        <p>{formatUSDC(lease.depositAmount)} USDC</p>
-                      </div>
-                      <div>
-                        <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "4px" }}>Stake</p>
-                        <p>{formatUSDC(lease.landlordStake)} USDC</p>
-                      </div>
-                      <div>
-                        <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "4px" }}>Tenant</p>
-                        <p className="mono" style={{ fontSize: "12px" }}>
-                          {lease.tenant.slice(0, 8)}...{lease.tenant.slice(-4)}
-                        </p>
-                      </div>
-                      <div>
-                        <p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "4px" }}>Deadline</p>
-                        <p>{formatDate(lease.deadline)}</p>
-                      </div>
+                      <div><p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "4px" }}>Deposit</p><p>{formatUSDC(lease.depositAmount)} USDC</p></div>
+                      <div><p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "4px" }}>Stake</p><p>{formatUSDC(lease.landlordStake)} USDC</p></div>
+                      <div><p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "4px" }}>Tenant</p><p className="mono" style={{ fontSize: "12px" }}>{lease.tenant.slice(0, 8)}...{lease.tenant.slice(-4)}</p></div>
+                      <div><p style={{ color: COLORS.textSecondary, fontSize: "12px", marginBottom: "4px" }}>Deadline</p><p>{formatDate(lease.deadline)}</p></div>
                     </div>
                   </button>
                 );
