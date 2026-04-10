@@ -1,5 +1,6 @@
-// frontend/src/components/HITLEscalation.jsx
+import PropTypes from "prop-types";
 import { useEffect, useState } from "react";
+import { API_BASE_URL } from "../config/api";
 
 const COLORS = {
   surface: "#12121A",
@@ -20,11 +21,9 @@ export default function HITLEscalation({
   isTenant,
   address,
   escrowDetails,
-  moveInPhotos = [],
-  moveOutPhotos = [],
   tenantAgreed = false,
   landlordAgreed = false,
-  onEscalated,  
+  onEscalated,
 }) {
   const [status, setStatus] = useState(null);
   const [statement, setStatement] = useState("");
@@ -35,7 +34,7 @@ export default function HITLEscalation({
   useEffect(() => {
     async function checkStatus() {
       try {
-        const res = await fetch(`http://localhost:3001/api/disputes/${leaseId}/escalation-status`);
+        const res = await fetch(`${API_BASE_URL}/api/disputes/${leaseId}/escalation-status`);
         if (res.ok) {
           const data = await res.json();
           if (data.escalated) {
@@ -55,32 +54,33 @@ export default function HITLEscalation({
   }, [leaseId]);
 
   const handleSubmitEscalation = async () => {
-  try {
-    setStatus("submitting");
-    const res = await fetch(`http://localhost:3001/api/disputes/${leaseId}/escalate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contestedBy: address,
-        role: isLandlord ? "landlord" : "tenant",
-        statement: statement || null,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-    if (!res.ok) throw new Error("Failed to escalate");
-    const data = await res.json();
-    setEscalationData(data);
-    setStatus("submitted");
-    onEscalated?.();       // ← ADD THIS
-  } catch (err) {
-    setError(err.message);
-    setStatus("error");
-  }
-};
+    try {
+      setStatus("submitting");
+      const res = await fetch(`${API_BASE_URL}/api/disputes/${leaseId}/escalate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contestedBy: address,
+          role: isLandlord ? "landlord" : "tenant",
+          statement: statement || null,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to escalate");
+      const data = await res.json();
+      setEscalationData(data);
+      setStatus("submitted");
+      onEscalated?.();
+    } catch (err) {
+      setError(err.message);
+      setStatus("error");
+    }
+  };
+
   if (!isLandlord && !isTenant) return null;
   if (status === null) return null;
 
-  // Hide only for the specific user who accepted on-chain
+  // Hide the panel for the specific party who has already accepted on-chain.
   const thisUserAccepted = (isTenant && tenantAgreed) || (isLandlord && landlordAgreed);
   if (thisUserAccepted) return null;
 
@@ -196,3 +196,21 @@ export default function HITLEscalation({
     </div>
   );
 }
+
+HITLEscalation.propTypes = {
+  leaseId: PropTypes.oneOfType([PropTypes.number, PropTypes.string]).isRequired,
+  /** True when the connected wallet is the lease landlord. */
+  isLandlord: PropTypes.bool.isRequired,
+  /** True when the connected wallet is the lease tenant. */
+  isTenant: PropTypes.bool.isRequired,
+  /** Connected wallet address (checksummed). */
+  address: PropTypes.string,
+  /** Raw lease struct array or object returned by useReadContract. */
+  escrowDetails: PropTypes.oneOfType([PropTypes.array, PropTypes.object]),
+  /** True if the tenant has already accepted the AI verdict on-chain. */
+  tenantAgreed: PropTypes.bool,
+  /** True if the landlord has already accepted the AI verdict on-chain. */
+  landlordAgreed: PropTypes.bool,
+  /** Called after a successful escalation POST to the backend. */
+  onEscalated: PropTypes.func,
+};

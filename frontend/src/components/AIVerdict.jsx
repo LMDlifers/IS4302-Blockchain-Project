@@ -1,6 +1,9 @@
+import PropTypes from "prop-types";
 import { useEffect, useMemo, useState } from "react";
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { ESCROW_ADDRESS, ESCROW_ABI } from "../config/contracts";
+import { AI_VERDICT_POLL_MS, API_BASE_URL } from "../config/api";
+import { ipfsUrl } from "../utils/format";
 
 export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscalated, externalRejected = false }) {
   const { address } = useAccount();
@@ -11,6 +14,8 @@ export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscala
   const landlordAddr = escrowDetails?.[0];
   const tenantAddr = escrowDetails?.[1];
 
+  // escrowDetails may arrive as a named struct (Wagmi v2) or as a positional tuple.
+  // Index 9 in the tuple corresponds to the `state` field.
   const stateIndex = escrowDetails && escrowDetails.length > 9
     ? Number(escrowDetails[9])
     : Number(escrowDetails?.state);
@@ -19,6 +24,7 @@ export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscala
   const isLandlord = address && landlordAddr && address.toLowerCase() === landlordAddr.toLowerCase();
   const canAct = isTenant || isLandlord;
 
+  // Guard against non-numeric leaseId values to avoid BigInt conversion errors.
   const safeLeaseId = useMemo(() => {
     try { return BigInt(leaseId?.toString() || "0"); }
     catch { return BigInt(0); }
@@ -29,7 +35,7 @@ export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscala
     abi: ESCROW_ABI,
     functionName: "aiVerdictCIDs",
     args: [safeLeaseId],
-    query: { refetchInterval: 4000 },
+    query: { refetchInterval: AI_VERDICT_POLL_MS },
   });
 
   const { data: tenantAgreed, refetch: refetchTenantAgreed } = useReadContract({
@@ -37,7 +43,7 @@ export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscala
     abi: ESCROW_ABI,
     functionName: "tenantAgreedAI",
     args: [safeLeaseId],
-    query: { refetchInterval: 4000 },
+    query: { refetchInterval: AI_VERDICT_POLL_MS },
   });
 
   const { data: landlordAgreed, refetch: refetchLandlordAgreed } = useReadContract({
@@ -45,32 +51,32 @@ export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscala
     abi: ESCROW_ABI,
     functionName: "landlordAgreedAI",
     args: [safeLeaseId],
-    query: { refetchInterval: 4000 },
+    query: { refetchInterval: AI_VERDICT_POLL_MS },
   });
-   const isRejected = userRejected || externalRejected;
 
-  // Load AI verdict from IPFS
+  const isRejected = userRejected || externalRejected;
+
+  // Load the AI verdict JSON from IPFS whenever the on-chain CID changes.
   useEffect(() => {
     const loadVerdict = async () => {
       if (!verdictCID || verdictCID === "") { setAiData(null); return; }
       try {
         setFetchError("");
-        const res = await fetch(`https://gateway.pinata.cloud/ipfs/${verdictCID}`);
+        const res = await fetch(ipfsUrl(verdictCID));
         if (!res.ok) throw new Error(`Failed to fetch verdict: ${res.status}`);
         const json = await res.json();
         setAiData(json);
       } catch (err) {
-        console.error("Failed to fetch AI verdict:", err);
         setFetchError(err.message || "Failed to load AI verdict");
       }
     };
     loadVerdict();
   }, [verdictCID]);
 
-  // On mount: check backend if this user already escalated (persists across page reloads)
+  // On mount: check backend if this user already escalated (persists across page reloads).
   useEffect(() => {
     if (!leaseId || !address) return;
-    fetch(`http://localhost:3001/api/disputes/${leaseId}/escalation-status`)
+    fetch(`${API_BASE_URL}/api/disputes/${leaseId}/escalation-status`)
       .then(r => r.json())
       .then(data => {
         if (data.escalated && data.contestedBy?.toLowerCase() === address.toLowerCase()) {
@@ -78,8 +84,8 @@ export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscala
           onEscalated?.();
         }
       })
-      .catch(() => {});
-  }, [leaseId, address]);
+      .catch((err) => setFetchError(err.message || "Could not load escalation status"));
+  }, [leaseId, address, onEscalated]);
 
   const { writeContract: writeAccept, data: acceptHash, isPending: isAcceptPending } = useWriteContract();
   const { writeContract: writeEscalate, data: escalateHash, isPending: isEscalatePending } = useWriteContract();
@@ -124,12 +130,14 @@ export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscala
     });
   };
 
+  // Current user's acceptance status based on their role.
   const hasCurrentUserAccepted = useMemo(() => {
     if (isTenant) return Boolean(tenantAgreed);
     if (isLandlord) return Boolean(landlordAgreed);
     return false;
   }, [isTenant, isLandlord, tenantAgreed, landlordAgreed]);
 
+  // Only render in DISPUTED state (index 2).
   if (stateIndex !== 2) return null;
 
   if (isVerdictCidLoading) {
@@ -183,26 +191,26 @@ export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscala
         </p>
       </div>
 
-      {/* Agreement Status — shows Rejected badge if this user escalated */}
+      {/* Agreement Status */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px", background: "#12121A", padding: "12px 16px", borderRadius: "8px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ color: "#94A3B8", fontSize: "13px" }}>Tenant Status:</span>
           <span className={`status-badge ${
             tenantAgreed ? "status-released"
-            : (isRejected) ? "status-disputed"
+            : isRejected ? "status-disputed"
             : "status-locked"
           }`}>
-            {tenantAgreed ? "Accepted" : (isRejected) ? "Rejected" : "Pending"}
+            {tenantAgreed ? "Accepted" : isRejected ? "Rejected" : "Pending"}
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ color: "#94A3B8", fontSize: "13px" }}>Landlord Status:</span>
           <span className={`status-badge ${
             landlordAgreed ? "status-released"
-            : (isRejected) ? "status-disputed"
+            : isRejected ? "status-disputed"
             : "status-locked"
           }`}>
-            {landlordAgreed ? "Accepted" : (isRejected) ? "Rejected" : "Pending"}
+            {landlordAgreed ? "Accepted" : isRejected ? "Rejected" : "Pending"}
           </span>
         </div>
       </div>
@@ -241,9 +249,21 @@ export default function AIVerdict({ leaseId, escrowDetails, onAccepted, onEscala
               ? <><span className="spinner"></span> Accepting...</>
               : "Accept Proposal"}
           </button>
-          
         </div>
       )}
     </div>
   );
 }
+
+AIVerdict.propTypes = {
+  /** Lease ID as a number or numeric string. */
+  leaseId: PropTypes.oneOfType([PropTypes.number, PropTypes.string]).isRequired,
+  /** Raw lease struct array or object returned by useReadContract. */
+  escrowDetails: PropTypes.oneOfType([PropTypes.array, PropTypes.object]),
+  /** Called when the current user successfully accepts the AI verdict on-chain. */
+  onAccepted: PropTypes.func,
+  /** Called when the current user successfully escalates to human arbitration. */
+  onEscalated: PropTypes.func,
+  /** True if the other party has already rejected the verdict (lifted from parent state). */
+  externalRejected: PropTypes.bool,
+};

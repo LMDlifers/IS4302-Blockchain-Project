@@ -9,16 +9,30 @@ const { startLeaseListeners } = require('./listeners/leaseListener');
 const { escrow } = require('./provider');
 const { createPaymentChallenge, verifyPayment } = require('./services/x402Service');
 const { uploadToIPFS } = require('./services/ipfsService');
+const { DEFAULT_PORT } = require('./config/constants');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const upload = multer({ storage: multer.memoryStorage() });
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || DEFAULT_PORT;
 
+/**
+ * In-memory escalation store: leaseId → escalation record.
+ * NOTE: This is reset on server restart. For production, persist to a database.
+ * @type {Object.<string, Object>}
+ */
 const escalations = {};
 
+/**
+ * Serialises a raw contract Lease struct to a JSON-safe object.
+ * Converts BigInt fields to strings so JSON.stringify doesn't throw.
+ *
+ * @param {number|string} leaseId - The lease ID.
+ * @param {Object} lease          - Raw struct returned by escrow.leases().
+ * @returns {Object}
+ */
 function serializeLease(leaseId, lease) {
   return {
     leaseId,
@@ -36,12 +50,20 @@ function serializeLease(leaseId, lease) {
   };
 }
 
-// ========== HEALTH CHECK ==========
+// ── Health check ────────────────────────────────────────────────────────────
+
+/** GET /health — Basic liveness probe. */
 app.get('/health', (req, res) => {
   res.json({ status: 'RentLock Backend is running' });
 });
 
-// ========== IPFS ROUTES ==========
+// ── IPFS routes ─────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/ipfs/upload
+ * Accepts a multipart file upload and pins it to IPFS via Pinata.
+ * Response: { cid: string }
+ */
 app.post('/api/ipfs/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
@@ -55,6 +77,11 @@ app.post('/api/ipfs/upload', upload.single('file'), async (req, res) => {
   }
 });
 
+/**
+ * POST /api/ipfs/upload-metadata
+ * Accepts a JSON body and pins it to IPFS as lease-metadata.json.
+ * Response: { cid: string }
+ */
 app.post('/api/ipfs/upload-metadata', express.json({ limit: '10mb' }), async (req, res) => {
   try {
     console.log(`[IPFS] Uploading metadata`);
@@ -67,7 +94,13 @@ app.post('/api/ipfs/upload-metadata', express.json({ limit: '10mb' }), async (re
   }
 });
 
-// ========== LEASE ROUTES ==========
+// ── Lease routes ────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/leases/count
+ * Returns the total number of leases created on-chain.
+ * Response: { count: string }
+ */
 app.get('/api/leases/count', async (req, res) => {
   try {
     const count = await escrow.leaseCounter();
@@ -78,6 +111,12 @@ app.get('/api/leases/count', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/leases[?user=0x...]
+ * Returns all leases, optionally filtered to those where the given address is
+ * landlord or tenant. Results are sorted newest-first.
+ * Response: { totalCount, count, leases: Lease[] }
+ */
 app.get('/api/leases', async (req, res) => {
   try {
     const user = req.query.user?.toLowerCase();
@@ -98,17 +137,30 @@ app.get('/api/leases', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/leases/:id
+ * Returns a single lease by ID.
+ * Response: Lease object
+ */
 app.get('/api/leases/:id', async (req, res) => {
   try {
     const lease = await escrow.leases(req.params.id);
     res.json(serializeLease(req.params.id, lease));
   } catch (err) {
     console.error('[Error] GET /api/leases/:id', err.message);
-    res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ========== DISPUTE ANALYSIS (X402 GATED) ==========
+// ── Dispute analysis (X402-gated) ───────────────────────────────────────────
+
+/**
+ * POST /api/disputes/analyze
+ * X402-gated endpoint that triggers LLM dispute analysis.
+ * Without payment headers → 402 with challenge.
+ * With valid X-Payment-Proof + X-Payment-Nonce → 200 acknowledgement.
+ * The actual analysis runs asynchronously via the dispute listener.
+ */
 app.post('/api/disputes/analyze', async (req, res) => {
   try {
     const proof = req.headers['x-payment-proof'];
@@ -118,7 +170,7 @@ app.post('/api/disputes/analyze', async (req, res) => {
       return res.status(402).json({ message: "Payment Required for LLM Inference", ...challenge });
     }
     const isValid = await verifyPayment(nonce, proof);
-    if (!isValid) return res.status(402).json({ message: "Payment verification failed" });
+    if (!isValid) return res.status(401).json({ message: "Payment verification failed" });
     res.json({ message: "Payment accepted. Dispute analysis will resolve on-chain.", leaseId: req.body.leaseId });
   } catch (err) {
     console.error('[Error] POST /api/disputes/analyze', err.message);
@@ -126,7 +178,14 @@ app.post('/api/disputes/analyze', async (req, res) => {
   }
 });
 
-// ========== HITL ESCALATION ROUTES ==========
+// ── HITL escalation routes ──────────────────────────────────────────────────
+
+/**
+ * POST /api/disputes/:leaseId/escalate
+ * Records a human-in-the-loop escalation request from a party.
+ * Body: { contestedBy: string, role: "landlord"|"tenant", statement?: string, timestamp?: string }
+ * Response: escalation record
+ */
 app.post('/api/disputes/:leaseId/escalate', (req, res) => {
   const { leaseId } = req.params;
   const { contestedBy, role, statement, timestamp } = req.body;
@@ -144,6 +203,10 @@ app.post('/api/disputes/:leaseId/escalate', (req, res) => {
   res.json(escalations[leaseId]);
 });
 
+/**
+ * GET /api/disputes/:leaseId/escalation-status
+ * Returns the escalation record for a lease, or { escalated: false } if none exists.
+ */
 app.get('/api/disputes/:leaseId/escalation-status', (req, res) => {
   const { leaseId } = req.params;
   const data = escalations[leaseId];
@@ -151,11 +214,21 @@ app.get('/api/disputes/:leaseId/escalation-status', (req, res) => {
   res.json(data);
 });
 
-// NOTE: /api/disputes/all MUST be before /api/disputes/:leaseId to avoid route conflict
+// NOTE: /api/disputes/all MUST be registered before /api/disputes/:leaseId to avoid conflict.
+/**
+ * GET /api/disputes/all
+ * Returns all escalation records (admin view).
+ * Response: { disputes: escalation[] }
+ */
 app.get('/api/disputes/all', (req, res) => {
   res.json({ disputes: Object.values(escalations) });
 });
 
+/**
+ * POST /api/disputes/:leaseId/resolve
+ * Updates the in-memory escalation record to reflect a resolved state.
+ * Body: { resolvedBy: string, txHash: string, amountToLandlord: string|number }
+ */
 app.post('/api/disputes/:leaseId/resolve', (req, res) => {
   const { leaseId } = req.params;
   const { resolvedBy, txHash, amountToLandlord } = req.body;
@@ -171,12 +244,18 @@ app.post('/api/disputes/:leaseId/resolve', (req, res) => {
   res.json(escalations[leaseId]);
 });
 
-// POST /api/disputes/:leaseId/resolve-onchain — backend wallet calls resolveDispute
+/**
+ * POST /api/disputes/:leaseId/resolve-onchain
+ * Backend wallet calls resolveDispute() on-chain using the human verifier's
+ * decided split amount.
+ * Body: { amountToLandlord: string|number } — human-readable USDC (e.g. "300")
+ * Response: { success: true, txHash: string }
+ */
 app.post('/api/disputes/:leaseId/resolve-onchain', async (req, res) => {
   const { leaseId } = req.params;
   const { amountToLandlord } = req.body;
   try {
-    // amountToLandlord is human USDC (e.g. "300"), parseUnits converts to 6-decimal raw
+    // parseUnits converts human-readable USDC to 6-decimal raw units.
     const parsedAmount = ethers.parseUnits(String(amountToLandlord), 6);
     const tx = await escrow.resolveDispute(leaseId, parsedAmount);
     await tx.wait();
@@ -195,7 +274,8 @@ app.post('/api/disputes/:leaseId/resolve-onchain', async (req, res) => {
   }
 });
 
-// ========== STARTUP ==========
+// ── Startup ─────────────────────────────────────────────────────────────────
+
 app.listen(PORT, async () => {
   console.log(`\n✓ Server listening on port ${PORT}`);
   console.log('Initializing blockchain event listeners...\n');

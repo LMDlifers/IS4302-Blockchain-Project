@@ -1,16 +1,24 @@
-const { ethers } = require("ethers");
 const { escrow, provider } = require("../provider");
 const { fetchFromIPFS, uploadToIPFS } = require("../services/ipfsService");
 const { analyzeDispute } = require("../services/llmService");
+const {
+  POLL_INTERVAL_MS,
+  USDC_DECIMALS_FACTOR,
+  LEASE_STATE_DISPUTED,
+  MAX_DISPUTE_RETRIES,
+} = require("../config/constants");
 
-const _rawThreshold = parseFloat(process.env.LLM_CONFIDENCE_THRESHOLD ?? "0.80");
-const CONFIDENCE_THRESHOLD = isNaN(_rawThreshold)
-  ? (() => { throw new Error("Invalid LLM_CONFIDENCE_THRESHOLD env var"); })()
-  : _rawThreshold;
+/**
+ * Tracks leases currently being processed (or already finished) along with
+ * a retry count so permanently failing disputes don't loop indefinitely.
+ * Map<leaseId, { retries: number }>
+ */
+const processedLeases = new Map();
 
-// Tracks leases currently being processed OR already done
-const processedLeases = new Set();
-
+/**
+ * Starts polling for DisputeRaised events and fans out processing.
+ * Each new dispute is handled in the background so the poll loop stays fast.
+ */
 async function startDisputeListener() {
   console.log("[Listener] Watching for DisputeRaised events via polling...");
 
@@ -25,21 +33,25 @@ async function startDisputeListener() {
 
       for (const event of events) {
         const leaseId = event.args[0].toString();
-        const verifier = event.args[1];
 
-        // ✅ Skip if already processing OR already done
+        // Skip leases already processing or exhausted retries.
         if (processedLeases.has(leaseId)) continue;
 
-        // ✅ IMMEDIATELY claim this leaseId to prevent re-entry on the next poll
-        processedLeases.add(leaseId);
+        // Claim the leaseId immediately to prevent re-entry on the next poll.
+        processedLeases.set(leaseId, { retries: 0 });
 
-        console.log(`\n[Dispute] Lease #${leaseId} disputed. Verifier: ${verifier}`);
+        console.log(`\n[Dispute] Lease #${leaseId} disputed.`);
 
-        // Process in background — do NOT await here so the poll loop stays fast
-        processDispute(leaseId, verifier).catch((err) => {
+        // Fire-and-forget so the poll loop is never blocked.
+        processDispute(leaseId).catch((err) => {
           console.error(`[Dispute] Failed to process lease #${leaseId}:`, err.message);
-          // ✅ Remove from set on failure so it can be retried on next poll
-          processedLeases.delete(leaseId);
+
+          const entry = processedLeases.get(leaseId);
+          if (entry && entry.retries < MAX_DISPUTE_RETRIES) {
+            processedLeases.delete(leaseId); // Allow retry on next poll
+          } else {
+            console.error(`[Dispute] Lease #${leaseId} exceeded max retries — abandoning.`);
+          }
         });
       }
 
@@ -47,21 +59,29 @@ async function startDisputeListener() {
     } catch (err) {
       console.error("[Listener] Polling error:", err.message);
     }
-  }, 2000);
+  }, POLL_INTERVAL_MS);
 
   console.log(`[Listener] Polling engine started. Current block: ${lastCheckedBlock}`);
 }
 
-async function processDispute(leaseId, verifier) {
+/**
+ * Fetches lease evidence from IPFS, calls the LLM arbitrator, uploads the
+ * verdict to IPFS, and submits it on-chain via submitAIVerdict.
+ *
+ * @param {string} leaseId - Stringified lease ID.
+ */
+async function processDispute(leaseId) {
   try {
     const lease = await escrow.leases(leaseId);
 
-    if (lease.state !== 2n) {
-      console.warn(`[Dispute] Lease #${leaseId} is no longer DISPUTED (state=${lease.state}), skipping.`);
+    if (lease.state !== LEASE_STATE_DISPUTED) {
+      console.warn(
+        `[Dispute] Lease #${leaseId} is no longer DISPUTED (state=${lease.state}), skipping.`
+      );
       return;
     }
 
-    const depositHuman = Number(lease.depositAmount) / 1_000_000;
+    const depositHuman = Number(lease.depositAmount) / USDC_DECIMALS_FACTOR;
 
     console.log(`[Dispute] Lease data:`, {
       landlord: lease.landlord,
@@ -123,7 +143,7 @@ async function processDispute(leaseId, verifier) {
       verdictCID = "IPFS_UPLOAD_FAILED";
     }
 
-    const amountToLandlordBN = BigInt(Math.round(verdict.amountToLandlord * 1_000_000));
+    const amountToLandlordBN = BigInt(Math.round(verdict.amountToLandlord * USDC_DECIMALS_FACTOR));
 
     console.log(`[Contract] Submitting AI proposal to blockchain...`);
     const tx = await escrow.submitAIVerdict(leaseId, amountToLandlordBN, verdictCID);
@@ -135,11 +155,10 @@ async function processDispute(leaseId, verifier) {
     } else {
       console.error(`[Contract] ✗ Transaction failed: ${tx.hash}`);
     }
-
   } catch (err) {
     console.error(`[Error] processDispute for lease #${leaseId}:`, err.message);
     console.error(err.stack);
-    throw err; // Caller's .catch() will remove from processedLeases for retry
+    throw err; // Caller's .catch() manages the retry counter.
   }
 }
 

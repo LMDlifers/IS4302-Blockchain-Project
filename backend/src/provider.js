@@ -1,10 +1,11 @@
-// 1. Load environment variables FIRST before doing anything else
+// Load environment variables FIRST before doing anything else
 require("dotenv").config();
 
 const { ethers } = require("ethers");
 const { ESCROW_ADDRESS, ESCROW_ABI } = require("../config/contracts");
+const { RECONNECT_DELAY_MS } = require("./config/constants");
 
-// 2. Validate the private key exists
+// Fail fast if the signing key is absent — nothing works without it.
 const privateKey = process.env.BACKEND_WALLET_PRIVATE_KEY;
 if (!privateKey) {
   console.error("❌ ERROR: BACKEND_WALLET_PRIVATE_KEY is missing from your .env file!");
@@ -17,20 +18,21 @@ const wsUrl = rpcUrl.replace("http://", "ws://").replace("https://", "wss://");
 
 console.log(`🔌 Connecting to Blockchain via WebSocket: ${wsUrl}`);
 
-// 3. Setup Provider and Wallet
 const provider = new ethers.WebSocketProvider(wsUrl);
 const wallet = new ethers.Wallet(privateKey, provider);
 const escrow = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, wallet);
 
-// 4. Handle WebSocket connections dropping
+// Reconnect on unexpected close — nodemon will restart the process.
 provider.websocket.on("close", (code) => {
-  console.error(`❌ WebSocket closed (code: ${code}). Reconnecting in 3s...`);
+  console.error(`❌ WebSocket closed (code: ${code}). Reconnecting in ${RECONNECT_DELAY_MS}ms...`);
   setTimeout(() => {
     console.log("🔄 Restarting backend to reconnect...");
-    process.exit(1); // nodemon will auto-restart
-  }, 3000);
+    process.exit(1);
+  }, RECONNECT_DELAY_MS);
 });
 
+// Log errors but do not auto-reconnect here; the "close" event always fires
+// after an error and handles the restart.
 provider.websocket.on("error", (err) => {
   console.error(`❌ WebSocket error: ${err.message}`);
 });

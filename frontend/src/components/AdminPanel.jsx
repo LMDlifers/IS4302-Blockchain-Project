@@ -1,7 +1,9 @@
-// frontend/src/components/AdminPanel.jsx
+import PropTypes from "prop-types";
 import { useState, useEffect, useCallback } from "react";
-import { useAccount, usePublicClient, useReadContract } from "wagmi";
+import { useReadContract } from "wagmi";
 import { ESCROW_ABI, ESCROW_ADDRESS } from "../config/contracts";
+import { API_BASE_URL, USDC_DECIMALS_FACTOR } from "../config/api";
+import { ipfsUrl, formatUSDC } from "../utils/format";
 
 const COLORS = {
   bg: "#0A0A0F", surface: "#12121A", card: "#16161F",
@@ -10,21 +12,25 @@ const COLORS = {
   textPrimary: "#F1F5F9", textSecondary: "#94A3B8", textMuted: "#475569",
 };
 
-const IPFS_GATEWAY = "https://gateway.pinata.cloud/ipfs/";
 const STATE_NAMES = ["CREATED", "LOCKED", "DISPUTED", "RELEASED", "REFUNDED"];
 
+/**
+ * Fetches on-chain lease details and the associated AI verdict from IPFS.
+ * Only executes when leaseId is truthy (used to defer loading until expanded).
+ */
 function useLeaseDetails(leaseId) {
   const [details, setDetails] = useState(null);
   const [aiVerdict, setAiVerdict] = useState(null);
+  const [fetchError, setFetchError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!leaseId) return;
     setLoading(true);
-    fetch(`http://localhost:3001/api/leases/${leaseId}`)
+    fetch(`${API_BASE_URL}/api/leases/${leaseId}`)
       .then((r) => r.json())
       .then((d) => setDetails(d))
-      .catch(() => {})
+      .catch((err) => setFetchError(err.message || "Failed to load lease"))
       .finally(() => setLoading(false));
   }, [leaseId]);
 
@@ -38,15 +44,19 @@ function useLeaseDetails(leaseId) {
 
   useEffect(() => {
     if (!verdictCID || verdictCID === "") return;
-    fetch(`${IPFS_GATEWAY}${verdictCID}`)
+    fetch(ipfsUrl(verdictCID))
       .then((r) => r.json())
       .then((d) => setAiVerdict(d))
-      .catch(() => {});
+      .catch((err) => setFetchError(err.message || "Failed to load AI verdict"));
   }, [verdictCID]);
 
-  return { details, aiVerdict, verdictCID, loading };
+  return { details, aiVerdict, verdictCID, loading, fetchError };
 }
 
+/**
+ * Displays photos stored under a given IPFS CID, fetching the metadata JSON
+ * and rendering each photo CID as a thumbnail.
+ */
 function EvidenceGallery({ cid, label, photoKey }) {
   const [meta, setMeta] = useState(null);
   const [fetchError, setFetchError] = useState(false);
@@ -55,7 +65,7 @@ function EvidenceGallery({ cid, label, photoKey }) {
     if (!cid) return;
     setMeta(null);
     setFetchError(false);
-    fetch(`https://gateway.pinata.cloud/ipfs/${cid}`)
+    fetch(ipfsUrl(cid))
       .then((r) => {
         if (!r.ok) throw new Error("IPFS fetch failed");
         return r.json();
@@ -68,7 +78,8 @@ function EvidenceGallery({ cid, label, photoKey }) {
     <p style={{ color: COLORS.textMuted, fontSize: "12px" }}>No {label} CID on-chain.</p>
   );
 
-  const photos = meta?.[photoKey] ?? [];
+  // Filter out placeholder CIDs injected during local testing.
+  const photos = (meta?.[photoKey] ?? []).filter(p => !p.includes("Fallback"));
 
   return (
     <div>
@@ -84,33 +95,31 @@ function EvidenceGallery({ cid, label, photoKey }) {
       {fetchError && (
         <p style={{ color: COLORS.red, fontSize: "12px" }}>⚠️ Could not fetch IPFS metadata.</p>
       )}
-      {meta && photos.length > 0 && !photos.every(p => p.includes("Fallback")) ? (
+      {meta && photos.length > 0 ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: "6px" }}>
-          {photos
-            .filter(p => !p.includes("Fallback"))
-            .map((photoCid, i) => (
-              <a key={i} href={`https://gateway.pinata.cloud/ipfs/${photoCid}`} target="_blank" rel="noopener noreferrer">
-                <img
-                  src={`https://gateway.pinata.cloud/ipfs/${photoCid}`}
-                  alt={`${label} ${i + 1}`}
-                  style={{
-                    width: "100%", height: "90px", objectFit: "cover",
-                    borderRadius: "6px", border: `1px solid ${COLORS.border}`,
-                    cursor: "pointer", transition: "opacity 0.2s",
-                  }}
-                  onError={(e) => { e.target.style.display = "none"; }}
-                  onMouseOver={(e) => { e.target.style.opacity = "0.8"; }}
-                  onMouseOut={(e) => { e.target.style.opacity = "1"; }}
-                />
-              </a>
-            ))}
+          {photos.map((photoCid, i) => (
+            <a key={i} href={ipfsUrl(photoCid)} target="_blank" rel="noopener noreferrer">
+              <img
+                src={ipfsUrl(photoCid)}
+                alt={`${label} ${i + 1}`}
+                style={{
+                  width: "100%", height: "90px", objectFit: "cover",
+                  borderRadius: "6px", border: `1px solid ${COLORS.border}`,
+                  cursor: "pointer", transition: "opacity 0.2s",
+                }}
+                onError={(e) => { e.target.style.display = "none"; }}
+                onMouseOver={(e) => { e.target.style.opacity = "0.8"; }}
+                onMouseOut={(e) => { e.target.style.opacity = "1"; }}
+              />
+            </a>
+          ))}
         </div>
       ) : meta ? (
         <p style={{ color: COLORS.textMuted, fontSize: "12px" }}>No photos uploaded.</p>
       ) : null}
       {cid && (
         <a
-          href={`https://gateway.pinata.cloud/ipfs/${cid}`}
+          href={ipfsUrl(cid)}
           target="_blank" rel="noopener noreferrer"
           style={{ fontSize: "11px", color: COLORS.textMuted, display: "inline-block", marginTop: "8px" }}
         >
@@ -121,6 +130,18 @@ function EvidenceGallery({ cid, label, photoKey }) {
   );
 }
 
+EvidenceGallery.propTypes = {
+  cid: PropTypes.string,
+  /** Human-readable section label (e.g. "Move-In Photos"). */
+  label: PropTypes.string.isRequired,
+  /** Key in the IPFS metadata JSON that holds the array of photo CIDs. */
+  photoKey: PropTypes.string.isRequired,
+};
+
+/**
+ * Card for a single escalated dispute. Expands to show on-chain lease details,
+ * evidence galleries, the AI verdict, and a form for the admin to resolve on-chain.
+ */
 function DisputeCard({ d, onResolved }) {
   const [expanded, setExpanded] = useState(false);
   const [amountInput, setAmountInput] = useState("");
@@ -129,8 +150,8 @@ function DisputeCard({ d, onResolved }) {
   const [localError, setLocalError] = useState("");
   const { details, aiVerdict, verdictCID, loading } = useLeaseDetails(expanded ? d.leaseId : null);
 
-  const deposit = details ? (Number(details.depositAmount) / 1_000_000).toFixed(2) : "—";
-  const stake = details ? (Number(details.landlordStake) / 1_000_000).toFixed(2) : "—";
+  const deposit = details ? formatUSDC(details.depositAmount) : "—";
+  const stake = details ? formatUSDC(details.landlordStake) : "—";
   const state = details ? (STATE_NAMES[details.state] ?? "UNKNOWN") : "—";
   const deadline = details ? new Date(Number(details.deadline) * 1000).toLocaleString() : "—";
 
@@ -140,7 +161,7 @@ function DisputeCard({ d, onResolved }) {
     try {
       setResolving(true);
       const res = await fetch(
-        `http://localhost:3001/api/disputes/${d.leaseId}/resolve-onchain`,
+        `${API_BASE_URL}/api/disputes/${d.leaseId}/resolve-onchain`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -152,13 +173,25 @@ function DisputeCard({ d, onResolved }) {
         throw new Error(err.error);
       }
       setShowResolveForm(false);
-      onResolved(); // reload parent list
+      onResolved(); // Reload the parent dispute list after resolution.
     } catch (err) {
       setLocalError(`Error: ${err.message}`);
     } finally {
       setResolving(false);
     }
   };
+
+  /**
+   * Formats the AI verdict amount for display.
+   * The LLM returns human-readable USDC (e.g. 300.0) but legacy on-chain data
+   * may have been stored as raw 6-decimal units (e.g. 300000000). Values above
+   * the maximum realistic human-readable deposit (~10 000 USDC) are treated as
+   * raw and converted; smaller values are used directly.
+   */
+  const formatVerdictAmount = (raw) =>
+    raw > 10_000 * USDC_DECIMALS_FACTOR
+      ? formatUSDC(raw)
+      : Number(raw).toFixed(2);
 
   return (
     <div style={{
@@ -260,24 +293,20 @@ function DisputeCard({ d, onResolved }) {
               <p style={{ color: COLORS.textMuted, fontSize: "13px" }}>No AI verdict submitted on-chain yet.</p>
             ) : aiVerdict ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "10px", fontSize: "13px" }}>
-                    {aiVerdict.amountToLandlord !== undefined && (
-                    <p>
-                        Landlord: <strong style={{ color: COLORS.purple }}>
-                        {/* Check if it's raw (>10000) or human number */}
-                        {aiVerdict.amountToLandlord > 10000
-                            ? (Number(aiVerdict.amountToLandlord) / 1_000_000).toFixed(2)
-                            : Number(aiVerdict.amountToLandlord).toFixed(2)
-                        } USDC
-                        </strong>
-                        {" · "}
-                        Tenant: <strong style={{ color: COLORS.accent }}>
-                        {aiVerdict.amountToLandlord > 10000
-                            ? ((Number(details?.depositAmount ?? 0) - Number(aiVerdict.amountToLandlord)) / 1_000_000).toFixed(2)
-                            : (Number(details?.depositAmount ?? 0) / 1_000_000 - Number(aiVerdict.amountToLandlord)).toFixed(2)
-                        } USDC
-                        </strong>
-                    </p>
-                    )}
+                {aiVerdict.amountToLandlord !== undefined && (
+                  <p>
+                    Landlord: <strong style={{ color: COLORS.purple }}>
+                      {formatVerdictAmount(aiVerdict.amountToLandlord)} USDC
+                    </strong>
+                    {" · "}
+                    Tenant: <strong style={{ color: COLORS.accent }}>
+                      {(
+                        Number(formatUSDC(details?.depositAmount ?? 0)) -
+                        Number(formatVerdictAmount(aiVerdict.amountToLandlord))
+                      ).toFixed(2)} USDC
+                    </strong>
+                  </p>
+                )}
                 {aiVerdict.reasoning && (
                   <div>
                     <p style={{ color: COLORS.textMuted, fontSize: "11px", marginBottom: "4px" }}>Reasoning</p>
@@ -293,7 +322,7 @@ function DisputeCard({ d, onResolved }) {
                   </div>
                 )}
                 <a
-                  href={`${IPFS_GATEWAY}${verdictCID}`}
+                  href={ipfsUrl(verdictCID)}
                   target="_blank" rel="noopener noreferrer"
                   style={{ fontSize: "11px", color: COLORS.textMuted }}
                 >
@@ -375,7 +404,24 @@ function DisputeCard({ d, onResolved }) {
   );
 }
 
-export default function AdminPanel({ onBack = () => {} }) {
+DisputeCard.propTypes = {
+  /** Escalation record from the backend. */
+  d: PropTypes.shape({
+    leaseId: PropTypes.oneOfType([PropTypes.number, PropTypes.string]).isRequired,
+    status: PropTypes.string,
+    role: PropTypes.string,
+    contestedBy: PropTypes.string,
+    statement: PropTypes.string,
+    timestamp: PropTypes.string,
+    resolvedBy: PropTypes.string,
+    txHash: PropTypes.string,
+  }).isRequired,
+  /** Called after a successful on-chain resolution to trigger a list refresh. */
+  onResolved: PropTypes.func.isRequired,
+};
+
+/** Admin view for reviewing escalated disputes and submitting on-chain resolutions. */
+export default function AdminPanel({ onBack }) {
   const [disputes, setDisputes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -383,7 +429,7 @@ export default function AdminPanel({ onBack = () => {} }) {
   const loadDisputes = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:3001/api/disputes/all");
+      const res = await fetch(`${API_BASE_URL}/api/disputes/all`);
       const data = await res.json();
       setDisputes(data.disputes || []);
     } catch {
@@ -459,3 +505,12 @@ export default function AdminPanel({ onBack = () => {} }) {
     </div>
   );
 }
+
+AdminPanel.propTypes = {
+  /** Called when the user navigates back from the admin panel. */
+  onBack: PropTypes.func,
+};
+
+AdminPanel.defaultProps = {
+  onBack: () => {},
+};

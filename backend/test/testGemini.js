@@ -1,5 +1,5 @@
-require("dotenv").config();
-const { analyzeDispute } = require("./services/llmService");
+require("dotenv").config({ path: require("path").resolve(__dirname, "../.env") });
+const { analyzeDispute } = require("../src/services/llmService");
 
 async function test() {
   const dummyEvidence = {
@@ -16,7 +16,7 @@ async function test() {
   };
 
   console.log("Testing Gemini Dispute Analysis...");
-  console.log("API Key Length:", process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.length : "undefined");
+  console.log("GEMINI_API_KEY configured:", !!process.env.GEMINI_API_KEY);
   try {
     const verdict = await analyzeDispute(dummyEvidence);
     console.log("\n✅ SUCCESS!");

@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useAccount, useConnect, useDisconnect, usePublicClient, useChainId } from "wagmi";
-import { injected } from "wagmi/connectors";
 import AIVerdict from "./components/AIVerdict";
 import AdminPanel from "./components/AdminPanel";
 import HITLEscalation from "./components/HITLEscalation";
@@ -11,11 +10,18 @@ import {
   useProposeRelease,
   useAcceptRelease,
   useRaiseDispute,
-  useResolveDispute,
   useTimeoutRefund,
   useLease,
-  useUSDCBalance,
 } from "./hooks/useEscrow";
+import {
+  API_BASE_URL,
+  CHAIN_ID,
+  USDC_DECIMALS_FACTOR,
+  STAKE_DIVISOR,
+  SECONDS_PER_DAY,
+  REFETCH_DELAY_MS,
+} from "./config/api";
+import { ipfsUrl, formatUSDC } from "./utils/format";
 
 const COLORS = {
   bg: "#0A0A0F",
@@ -228,7 +234,7 @@ function Navbar() {
   const { connect, connectors } = useConnect();
   const { disconnect } = useDisconnect();
   const chainId = useChainId();
-  const wrongChain = isConnected && chainId !== 1337;
+  const wrongChain = isConnected && chainId !== CHAIN_ID;
 
   const handleConnect = async () => {
     if (isConnected) {
@@ -240,9 +246,8 @@ function Navbar() {
           await connect({ connector });
         } catch (err) {
           if (err.message?.includes("chain") || err.name === "ChainNotConfiguredError") {
-            alert("Wrong network detected. Switch MetaMask to Hardhat (Chain ID: 1337, RPC: http://127.0.0.1:8545).");
+            alert(`Wrong network detected. Switch MetaMask to Hardhat (Chain ID: ${CHAIN_ID}, RPC: http://127.0.0.1:8545).`);
           } else {
-            console.error("Connection failed:", err);
             alert(`Connection failed: ${err.message}\n\nTroubleshooting:\n1. Ensure MetaMask is UNLOCKED.\n2. In MetaMask, check 'Connected Sites' for localhost.\n3. If using Opera, disable Opera's built-in wallet in settings.`);
           }
         }
@@ -274,7 +279,7 @@ function Navbar() {
       </div>
       {wrongChain && (
         <div style={{ background: COLORS.orange, color: "#000", padding: "8px 16px", textAlign: "center", fontSize: "13px", fontWeight: "600" }}>
-          Wrong network — switch MetaMask to Hardhat (Chain ID: 1337, RPC: http://127.0.0.1:8545)
+          Wrong network — switch MetaMask to Hardhat (Chain ID: {CHAIN_ID}, RPC: http://127.0.0.1:8545)
         </div>
       )}
     </>
@@ -312,7 +317,7 @@ function CreateEscrow({ onSuccess, onBack }) {
         const fd = new FormData();
         fd.append("file", file);
         try {
-          const res = await fetch("http://localhost:3001/api/ipfs/upload", { method: "POST", body: fd });
+          const res = await fetch(`${API_BASE_URL}/api/ipfs/upload`, { method: "POST", body: fd });
           if (!res.ok) throw new Error("Server error");
           const data = await res.json();
           cids.push({ cid: data.cid, name: file.name });
@@ -341,14 +346,15 @@ function CreateEscrow({ onSuccess, onBack }) {
       setError("Please fill all fields and upload move-in photos");
       return;
     }
+    // Parse dd/mm/yyyy from the stored 8-digit string (e.g. "01042026" → "2026-04-01").
     const dd = formData.deadline.slice(0, 2);
     const mm = formData.deadline.slice(2, 4);
     const yyyy = formData.deadline.slice(4, 8);
     const deadline = Math.floor(new Date(`${yyyy}-${mm}-${dd}`).getTime() / 1000);
     if (isNaN(deadline)) { setError("Invalid lease deadline date. Use dd/mm/yyyy format."); return; }
-    const gracePeriod = parseInt(formData.gracePeriodDays) * 24 * 60 * 60;
+    const gracePeriod = parseInt(formData.gracePeriodDays) * SECONDS_PER_DAY;
     const depositAmount = parseFloat(formData.depositAmount);
-    const stakeAmount = depositAmount / 5;
+    const stakeAmount = depositAmount / STAKE_DIVISOR;
     try {
       setSuccess("Step 1 of 2: Approving USDC stake... (confirm in MetaMask)");
       const approveTxHash = await approveStake(stakeAmount);
@@ -357,7 +363,7 @@ function CreateEscrow({ onSuccess, onBack }) {
       setSuccess("Step 2 of 2: Creating lease... (confirm in MetaMask)");
       await initializeLease(formData.tenantAddress, depositAmount, deadline, gracePeriod, formData.moveInCID);
       setSuccess("✓ Lease created! Awaiting confirmation...");
-      setTimeout(() => onSuccess?.(), 2000);
+      setTimeout(() => onSuccess?.(), REFETCH_DELAY_MS);
     } catch (err) {
       setError(`Contract call failed: ${err.message}`);
     }
@@ -461,7 +467,7 @@ function CreateEscrow({ onSuccess, onBack }) {
               }
               setUploading(true);
               try {
-                const metadataRes = await fetch("http://localhost:3001/api/ipfs/upload-metadata", {
+                const metadataRes = await fetch(`${API_BASE_URL}/api/ipfs/upload-metadata`, {
                   method: "POST", headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ moveInPhotoCIDs: cids.map(item => item.cid), leaseTerms: { tenantAddress: formData.tenantAddress, depositAmount: formData.depositAmount, deadline: formData.deadline }, uploadedAt: new Date().toISOString(), type: "move-in" }),
                 });
@@ -486,7 +492,7 @@ function CreateEscrow({ onSuccess, onBack }) {
           <div style={{ background: COLORS.surface, padding: "16px", borderRadius: "8px", marginBottom: "20px", fontSize: "14px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Tenant:</span><span className="mono">{formData.tenantAddress?.slice(0, 10)}...</span></div>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Deposit:</span><span>{formData.depositAmount} USDC</span></div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Your Stake:</span><span>{(parseFloat(formData.depositAmount) / 5 || 0).toFixed(2)} USDC (20%)</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Your Stake:</span><span>{(parseFloat(formData.depositAmount) / STAKE_DIVISOR || 0).toFixed(2)} USDC (20%)</span></div>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Deadline:</span><span>{formData.deadline}</span></div>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}><span>Grace Period:</span><span>{formData.gracePeriodDays} days after deadline</span></div>
             <div style={{ display: "flex", justifyContent: "space-between" }}><span>Move-In Photos:</span><span style={{ color: COLORS.accent }}>{moveInPhotoCIDs.length} photo(s) ✓</span></div>
@@ -530,15 +536,21 @@ function EscrowDetail({ leaseId, onBack }) {
   const [moveOutPhotos, setMoveOutPhotos] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(false);
 
+  /**
+   * Lease tuple field order (matches EscrowManager.sol Lease struct):
+   * [0] landlord, [1] tenant, [2] verifier, [3] depositAmount, [4] landlordStake,
+   * [5] deadline, [6] gracePeriod, [7] moveInCID, [8] moveOutCID,
+   * [9] state (LeaseState enum), [10] amountToLandlord
+   */
   const [
     landlordRaw, tenantRaw, verifierRaw,
     depositAmountRaw, landlordStakeRaw, deadlineRaw, gracePeriodRaw,
     moveInCIDRaw, moveOutCIDRaw, stateRaw, amountToLandlordRaw
   ] = lease || [];
 
-  const displayDeposit = Number(depositAmountRaw || 0) / 1_000_000;
-  const displayStake = Number(landlordStakeRaw || 0) / 1_000_000;
-  const proposedLandlordAmount = Number(amountToLandlordRaw || 0) / 1_000_000;
+  const displayDeposit = Number(depositAmountRaw || 0) / USDC_DECIMALS_FACTOR;
+  const displayStake = Number(landlordStakeRaw || 0) / USDC_DECIMALS_FACTOR;
+  const proposedLandlordAmount = Number(amountToLandlordRaw || 0) / USDC_DECIMALS_FACTOR;
   const tenantRefundAmount = displayDeposit - proposedLandlordAmount;
 
   useEffect(() => {
@@ -549,22 +561,22 @@ function EscrowDetail({ leaseId, onBack }) {
         const fetchPromises = [];
         if (moveInCIDRaw && moveInCIDRaw !== "") {
           fetchPromises.push(
-            fetch(`https://gateway.pinata.cloud/ipfs/${moveInCIDRaw}`)
+            fetch(ipfsUrl(moveInCIDRaw))
               .then(res => res.json())
               .then(metadata => { if (metadata.moveInPhotoCIDs && Array.isArray(metadata.moveInPhotoCIDs)) setMoveInPhotos(metadata.moveInPhotoCIDs); })
-              .catch(err => console.error("Move-in IPFS error:", err))
+              .catch(() => {}) // Non-critical; gallery shows empty state on failure.
           );
         }
         if (moveOutCIDRaw && moveOutCIDRaw !== "") {
           fetchPromises.push(
-            fetch(`https://gateway.pinata.cloud/ipfs/${moveOutCIDRaw}`)
+            fetch(ipfsUrl(moveOutCIDRaw))
               .then(res => res.json())
               .then(metadata => { if (metadata.moveOutPhotoCIDs && Array.isArray(metadata.moveOutPhotoCIDs)) setMoveOutPhotos(metadata.moveOutPhotoCIDs); })
-              .catch(err => console.error("Move-out IPFS error:", err))
+              .catch(() => {}) // Non-critical; gallery shows empty state on failure.
           );
         }
         await Promise.all(fetchPromises);
-      } catch (err) { console.error(err); }
+      } catch (err) { setError(`Evidence load failed: ${err.message}`); }
       finally { setLoadingPhotos(false); }
     }
     if (lease) fetchEvidence();
@@ -588,7 +600,7 @@ function EscrowDetail({ leaseId, onBack }) {
       setSuccess("✓ USDC approved. Now depositing...");
       await deposit(leaseId);
       setSuccess("✓ Funds deposited! Lease is now LOCKED");
-      setTimeout(() => refetch(), 2000);
+      setTimeout(() => refetch(), REFETCH_DELAY_MS);
     } catch (err) { setError(`Deposit failed: ${err.message}`); }
     finally { setTxPending(false); }
   };
@@ -603,7 +615,7 @@ function EscrowDetail({ leaseId, onBack }) {
         const fd = new FormData();
         fd.append("file", file);
         try {
-          const res = await fetch("http://localhost:3001/api/ipfs/upload", { method: "POST", body: fd });
+          const res = await fetch(`${API_BASE_URL}/api/ipfs/upload`, { method: "POST", body: fd });
           if (!res.ok) throw new Error();
           const data = await res.json();
           cids.push({ cid: data.cid, name: file.name });
@@ -618,7 +630,7 @@ function EscrowDetail({ leaseId, onBack }) {
     try {
       setTxPending(true);
       let outCID = "QmDemoDamageMeta" + Math.floor(Math.random() * 9999);
-      const res = await fetch("http://localhost:3001/api/ipfs/upload-metadata", {
+      const res = await fetch(`${API_BASE_URL}/api/ipfs/upload-metadata`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           moveOutPhotoCIDs: damagePhotoCIDs.length > 0 ? damagePhotoCIDs.map(item => item.cid) : ["QmDemoDamageFallback"],
@@ -629,7 +641,7 @@ function EscrowDetail({ leaseId, onBack }) {
       if (res.ok) { const data = await res.json(); outCID = data.cid; }
       await propose(leaseId, proposedAmountInput, outCID);
       setSuccess("✓ Release proposed. Waiting for tenant...");
-      setTimeout(() => refetch(), 2000);
+      setTimeout(() => refetch(), REFETCH_DELAY_MS);
     } catch (err) { setError(`Proposal failed: ${err.message}`); }
     finally { setTxPending(false); }
   };
@@ -712,7 +724,7 @@ function EscrowDetail({ leaseId, onBack }) {
             The deadline and grace period have expired. You can claim your full deposit back and slash the landlord's stake.
           </p>
           <button className="btn-primary" style={{ background: COLORS.orange, color: "#000" }} disabled={txPending} onClick={async () => {
-            try { setTxPending(true); await refund(leaseId); setSuccess("✓ Refund claimed!"); setTimeout(() => refetch(), 2000); }
+            try { setTxPending(true); await refund(leaseId); setSuccess("✓ Refund claimed!"); setTimeout(() => refetch(), REFETCH_DELAY_MS); }
             catch (err) { setError(`Refund failed: ${err.message}`); }
             finally { setTxPending(false); }
           }}>
@@ -732,14 +744,14 @@ function EscrowDetail({ leaseId, onBack }) {
           <p style={{ marginBottom: "16px", fontSize: "14px" }}>Review the evidence gallery below. Accept the proposal to finalize, or raise a dispute.</p>
           <div style={{ display: "flex", gap: "12px" }}>
             <button className="btn-primary" onClick={async () => {
-              try { setTxPending(true); await accept(leaseId); setSuccess("✓ Proposal accepted!"); setTimeout(() => refetch(), 2000); }
+              try { setTxPending(true); await accept(leaseId); setSuccess("✓ Proposal accepted!"); setTimeout(() => refetch(), REFETCH_DELAY_MS); }
               catch (err) { setError(`Accept failed: ${err.message}`); }
               finally { setTxPending(false); }
             }} disabled={txPending} style={{ background: COLORS.green }}>
               {txPending ? <span className="spinner"></span> : "Accept & Release"}
             </button>
             <button className="btn-primary" onClick={async () => {
-              try { setTxPending(true); await raise(leaseId); setSuccess("✓ Dispute raised."); setTimeout(() => refetch(), 2000); }
+              try { setTxPending(true); await raise(leaseId); setSuccess("✓ Dispute raised."); setTimeout(() => refetch(), REFETCH_DELAY_MS); }
               catch (err) { setError(`Dispute failed: ${err.message}`); }
               finally { setTxPending(false); }
             }} disabled={txPending} style={{ background: COLORS.red }}>
@@ -761,8 +773,8 @@ function EscrowDetail({ leaseId, onBack }) {
                 {moveInPhotos.length > 0 ? (
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: "8px" }}>
                     {moveInPhotos.map((cid, i) => cid.includes("Fallback") ? null : (
-                      <a key={i} href={`https://gateway.pinata.cloud/ipfs/${cid}`} target="_blank" rel="noopener noreferrer">
-                        <img src={`https://gateway.pinata.cloud/ipfs/${cid}`} alt={`Move-in ${i}`} style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "6px" }} />
+                      <a key={i} href={ipfsUrl(cid)} target="_blank" rel="noopener noreferrer">
+                        <img src={ipfsUrl(cid)} alt={`Move-in ${i}`} style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "6px" }} />
                       </a>
                     ))}
                   </div>
@@ -773,8 +785,8 @@ function EscrowDetail({ leaseId, onBack }) {
                 {moveOutPhotos.length > 0 ? (
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: "8px" }}>
                     {moveOutPhotos.map((cid, i) => cid.includes("Fallback") ? null : (
-                      <a key={i} href={`https://gateway.pinata.cloud/ipfs/${cid}`} target="_blank" rel="noopener noreferrer">
-                        <img src={`https://gateway.pinata.cloud/ipfs/${cid}`} alt={`Move-out ${i}`} style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "6px" }} />
+                      <a key={i} href={ipfsUrl(cid)} target="_blank" rel="noopener noreferrer">
+                        <img src={ipfsUrl(cid)} alt={`Move-out ${i}`} style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "6px" }} />
                       </a>
                     ))}
                   </div>
@@ -802,10 +814,7 @@ function EscrowDetail({ leaseId, onBack }) {
             isTenant={isTenant}
             address={address}
             escrowDetails={lease}
-            moveInPhotos={moveInPhotos}
-            moveOutPhotos={moveOutPhotos}
-            hasAccepted={aiVerdictAccepted}
-            onEscalated={() => setAiRejected(true)} 
+            onEscalated={() => setAiRejected(true)}
           />
         </>
       )}
@@ -829,7 +838,7 @@ function Dashboard() {
     setLoadingLeases(true);
     setLeaseLoadError("");
     try {
-      const res = await fetch(`http://localhost:3001/api/leases?user=${encodeURIComponent(address)}`);
+      const res = await fetch(`${API_BASE_URL}/api/leases?user=${encodeURIComponent(address)}`);
       if (!res.ok) throw new Error(`Failed to load escrows (${res.status})`);
       const data = await res.json();
       setMyLeases(data.leases || []);
@@ -849,7 +858,6 @@ function Dashboard() {
     loadMyLeases();
   }, [isConnected, activeTab, address]);
 
-  const formatUSDC = (raw) => (Number(raw || 0) / 1_000_000).toFixed(2);
   const formatDate = (raw) => {
     const ts = Number(raw || 0);
     if (!ts) return "-";

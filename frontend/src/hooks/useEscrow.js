@@ -1,7 +1,6 @@
 import {
   useReadContract,
   useWriteContract,
-  useWaitForTransactionReceipt,
 } from "wagmi";
 import { parseUnits } from "viem";
 import {
@@ -10,11 +9,14 @@ import {
   USDC_ABI,
   USDC_ADDRESS,
 } from "../config/contracts";
+import { GAS_LIMIT, LEASE_POLL_MS } from "../config/api";
 
 /**
- * Hook to read a single lease by ID
- * Fix 4.4: reduced interval from 1000ms to 5000ms; stops polling on terminal states
- * (RELEASED=3, REFUNDED=4) to avoid burning RPC quota indefinitely.
+ * Reads a single lease by ID with adaptive polling.
+ * Polling stops automatically once the lease reaches a terminal state
+ * (RELEASED = 3, REFUNDED = 4) to avoid burning RPC quota indefinitely.
+ * The lease struct is returned as a plain object by Wagmi; `state` may be
+ * at index 9 (tuple form) or on the `state` property (named form).
  */
 export function useLease(leaseId) {
   return useReadContract({
@@ -24,20 +26,22 @@ export function useLease(leaseId) {
     args: [leaseId],
     query: {
       refetchInterval: (data) => {
-        // data is the raw tuple; index 9 is the state field
-        const state = data?.state != null ? Number(data.state) : (Array.isArray(data) ? Number(data[9]) : null);
-        // Stop polling once the lease reaches a terminal state (RELEASED or REFUNDED)
-        return state !== null && state >= 3 ? false : 5000;
+        const state =
+          data?.state != null
+            ? Number(data.state)
+            : Array.isArray(data)
+            ? Number(data[9])
+            : null;
+        return state !== null && state >= 3 ? false : LEASE_POLL_MS;
       },
     },
   });
 }
 
 /**
- * Hook to approve USDC spend
- * Fix 4.2: amount is expected as a human-readable number or string (e.g. "200" for 200 USDC).
+ * Approves the escrow contract to spend USDC on the caller's behalf.
+ * `amount` must be a human-readable value (e.g. "200" for 200 USDC);
  * parseUnits converts it to the correct 6-decimal raw value.
- * Do NOT pass a raw BigInt string here — use the human-readable deposit/stake amount.
  */
 export function useApproveUSDC() {
   const { writeContractAsync } = useWriteContract();
@@ -49,7 +53,7 @@ export function useApproveUSDC() {
       abi: USDC_ABI,
       functionName: "approve",
       args: [ESCROW_ADDRESS, parsedAmount],
-      gas: 3000000n,
+      gas: GAS_LIMIT,
       ...options,
     });
   };
@@ -58,9 +62,8 @@ export function useApproveUSDC() {
 }
 
 /**
- * Hook to deposit funds into escrow
- * Step 2 of the 2-step deposit flow
- * Requires prior approval via useApproveUSDC
+ * Deposits the full tenant deposit into escrow (step 2 of the 2-step deposit flow).
+ * Requires a prior USDC approval via useApproveUSDC for at least depositAmount.
  */
 export function useDepositFunds() {
   const { writeContractAsync } = useWriteContract();
@@ -71,7 +74,7 @@ export function useDepositFunds() {
       abi: ESCROW_ABI,
       functionName: "depositFunds",
       args: [leaseId],
-      gas: 3000000n,
+      gas: GAS_LIMIT,
       ...options,
     });
   };
@@ -80,8 +83,8 @@ export function useDepositFunds() {
 }
 
 /**
- * Hook to initialize a new lease
- * Landlord stakes 20% of deposit and uploads IPFS CID
+ * Initialises a new lease. Landlord must first approve USDC spend for
+ * the stake amount (depositAmount / STAKE_DIVISOR).
  */
 export function useInitializeLease() {
   const { writeContractAsync } = useWriteContract();
@@ -93,7 +96,7 @@ export function useInitializeLease() {
       abi: ESCROW_ABI,
       functionName: "initializeLease",
       args: [tenant, parsedDeposit, deadline, gracePeriod, ipfsCID],
-      gas: 3000000n,
+      gas: GAS_LIMIT,
       ...options,
     });
   };
@@ -102,8 +105,7 @@ export function useInitializeLease() {
 }
 
 /**
- * Hook for landlord to propose a release split
- * Specifies how much of deposit they want to keep and provides damage evidence
+ * Landlord proposes a deposit split and uploads move-out evidence (one-time only).
  */
 export function useProposeRelease() {
   const { writeContractAsync } = useWriteContract();
@@ -115,7 +117,7 @@ export function useProposeRelease() {
       abi: ESCROW_ABI,
       functionName: "proposeRelease",
       args: [leaseId, parsedAmount, moveOutCID],
-      gas: 3000000n,
+      gas: GAS_LIMIT,
       ...options,
     });
   };
@@ -124,8 +126,7 @@ export function useProposeRelease() {
 }
 
 /**
- * Hook for tenant to accept landlord's proposed split
- * Fix 4.3: changed from writeContract to writeContractAsync so await works correctly
+ * Tenant accepts the landlord's proposed deposit split.
  */
 export function useAcceptRelease() {
   const { writeContractAsync } = useWriteContract();
@@ -136,7 +137,7 @@ export function useAcceptRelease() {
       abi: ESCROW_ABI,
       functionName: "acceptRelease",
       args: [leaseId],
-      gas: 3000000n,
+      gas: GAS_LIMIT,
       ...options,
     });
   };
@@ -145,8 +146,7 @@ export function useAcceptRelease() {
 }
 
 /**
- * Hook for tenant to raise a dispute
- * Fix 4.3: changed from writeContract to writeContractAsync so await works correctly
+ * Tenant raises a dispute, transitioning the lease to DISPUTED state.
  */
 export function useRaiseDispute() {
   const { writeContractAsync } = useWriteContract();
@@ -157,7 +157,7 @@ export function useRaiseDispute() {
       abi: ESCROW_ABI,
       functionName: "raiseDispute",
       args: [leaseId],
-      gas: 3000000n,
+      gas: GAS_LIMIT,
       ...options,
     });
   };
@@ -166,8 +166,7 @@ export function useRaiseDispute() {
 }
 
 /**
- * Hook for verifier to submit dispute resolution
- * Fix 4.3: changed from writeContract to writeContractAsync so await works correctly
+ * Verifier resolves a dispute by specifying the landlord's payout.
  */
 export function useResolveDispute() {
   const { writeContractAsync } = useWriteContract();
@@ -179,7 +178,7 @@ export function useResolveDispute() {
       abi: ESCROW_ABI,
       functionName: "resolveDispute",
       args: [leaseId, parsedAmount],
-      gas: 3000000n,  
+      gas: GAS_LIMIT,
     });
   };
 
@@ -187,8 +186,7 @@ export function useResolveDispute() {
 }
 
 /**
- * Hook for timeout refund — callable by tenant after deadline + grace period
- * Fix 4.3: changed from writeContract to writeContractAsync so await works correctly
+ * Tenant claims a full refund after deadline + grace period has elapsed.
  */
 export function useTimeoutRefund() {
   const { writeContractAsync } = useWriteContract();
@@ -199,29 +197,25 @@ export function useTimeoutRefund() {
       abi: ESCROW_ABI,
       functionName: "timeoutRefund",
       args: [leaseId],
-      gas: 3000000n,  
+      gas: GAS_LIMIT,
     });
   };
 
   return { refund };
 }
 
-/**
- * Helper hook to read USDC balance
- */
+/** Reads the USDC balance of an address. */
 export function useUSDCBalance(address) {
   return useReadContract({
     address: USDC_ADDRESS,
     abi: USDC_ABI,
     functionName: "balanceOf",
     args: [address],
-    gas: 3000000n,  
+    gas: GAS_LIMIT,
   });
 }
 
-/**
- * Helper hook to read USDC allowance
- */
+/** Reads the USDC allowance granted by owner to spender. */
 export function useUSDCAllowance(owner, spender) {
   return useReadContract({
     address: USDC_ADDRESS,

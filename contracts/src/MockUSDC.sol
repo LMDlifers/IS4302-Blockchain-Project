@@ -14,7 +14,9 @@ contract MockUSDC is ERC20 {
     }
 
     /**
-     * @dev Mint tokens for testing
+     * @notice Mints USDC tokens to an arbitrary address for test setup.
+     * @param to     Recipient address.
+     * @param amount Token amount in 6-decimal USDC units.
      */
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
