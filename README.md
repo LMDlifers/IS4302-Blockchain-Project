@@ -28,43 +28,42 @@ A trustless, on-chain rental deposit system that uses **Google Gemini AI** to au
 
 ## 📋 Prerequisites
 
-Before you start, make sure you have:
-
-- **Node.js** v18+ (`node --version`)
-- **npm** v9+ (`npm --version`)
-- **MetaMask** browser extension installed
-- **Git** (to clone this repo)
-- API Keys (see [Environment Setup](#-environment-setup)):
-  - Google Gemini API Key
-  - Pinata IPFS JWT (optional — a demo fallback is built in)
+- **Node.js** v18+ and **npm** v9+
+- **MetaMask** browser extension
+- **Google Gemini API Key** — [Get one at Google AI Studio](https://aistudio.google.com/app/apikey)
+- **Pinata JWT** (optional) — [app.pinata.cloud](https://app.pinata.cloud/developers/api-keys); a demo fallback CID is used if absent
 
 ---
 
-## 🚀 Full Setup Guide (First Time)
+## 🚀 Setup Guide
 
-### Step 1: Clone & Install Dependencies
+### Step 1 — Clone and install dependencies
 
 ```bash
 git clone <repo-url>
 cd IS4302-Blockchain-Project
 
-# Install all dependencies
-cd contracts && npm install
-cd ../backend  && npm install
-cd ../frontend && npm install
+npm install --prefix contracts
+npm install --prefix backend
+npm install --prefix frontend
 ```
 
-### Step 2: Environment Setup
+---
 
-#### Backend (`backend/.env`)
-Create `backend/.env` with the following:
+### Step 2 — Create environment files
+
+#### `backend/.env`
+
 ```env
 PORT=3001
 CHAIN_ID=1337
 RPC_URL=http://127.0.0.1:8545
-BACKEND_WALLET_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 
-# Paste these after deploying contracts (Step 4):
+# Hardhat Account #0 private key (test only — never use on mainnet)
+BACKEND_WALLET_PRIVATE_KEY=<hardhat_account_0_private_key>
+BACKEND_WALLET_ADDRESS=<hardhat_account_0_address>
+
+# Paste contract addresses after Step 5:
 ESCROW_MANAGER_ADDRESS=
 USDC_ADDRESS=
 
@@ -73,127 +72,181 @@ GEMINI_API_KEY=<your_google_ai_studio_key>
 PINATA_JWT=<your_pinata_jwt_token>
 ```
 
-#### Frontend (`frontend/.env`)
-Create `frontend/.env` with the following:
+#### `frontend/.env`
+
 ```env
 VITE_RPC_URL=http://127.0.0.1:8545
 VITE_CHAIN_ID=1337
 
-# Paste these after deploying contracts (Step 4):
+# Paste contract addresses after Step 5:
 VITE_ESCROW_ADDRESS=
 VITE_USDC_ADDRESS=
+
+# Optional overrides (defaults shown):
+# VITE_API_BASE_URL=http://localhost:3001
+# VITE_IPFS_GATEWAY=https://gateway.pinata.cloud/ipfs
+# VITE_INFURA_KEY=<your_infura_key>   # Only needed for Sepolia testnet
 ```
 
-### Step 3: Configure MetaMask
+> ⚠️ Never commit `.env` files. Both are listed in `.gitignore`.
 
-1. **Add Hardhat Network** to MetaMask:
-   - Network Name: `Hardhat`
-   - RPC URL: `http://127.0.0.1:8545`
-   - Chain ID: `1337`
-   - Currency Symbol: `ETH`
+---
 
-2. **Import the Landlord account** (Hardhat Account #0):
-   - MetaMask → top-right account icon → **Add account → Import account**
-   - Paste private key: `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`
-   - Rename it **"Landlord"** — it will show 10,000 ETH on the Hardhat network
-   - Address: `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`
+### Step 3 — Configure MetaMask
 
-3. **Import the Tenant account** (Hardhat Account #1):
-   - Same steps, paste private key: `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d`
-   - Rename it **"Tenant"**
-   - Address: `0x70997970C51812dc3A010C7d01b50e0d17dc79C8`
+**Add the Hardhat network:**
 
-4. **Add MockUSDC token** (so USDC balances are visible in MetaMask):
-   - MetaMask → **Tokens** tab → **Import tokens**
-   - Token contract address: `0x5FbDB2315678afecb367f032d93F642f64180aa3`
-   - Symbol: `USDC`, Decimals: `6`
+| Field | Value |
+|-------|-------|
+| Network Name | `Hardhat` |
+| RPC URL | `http://127.0.0.1:8545` |
+| Chain ID | `1337` |
+| Currency Symbol | `ETH` |
 
-> ⚠️ These are publicly known Hardhat test keys. **Never use them on mainnet.**
+**Import test accounts** (MetaMask → top-right → Add account → Import account):
 
-### Step 4: Start the Local Blockchain
+| Role | Private Key | Address |
+|------|-------------|---------|
+| Landlord (Account #0) | *First key from `npx hardhat node` output* | `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` |
+| Tenant (Account #1) | *Second key from `npx hardhat node` output* | `0x70997970C51812dc3A010C7d01b50e0d17dc79C8` |
 
-Open a terminal in the `contracts/` folder:
+> ⚠️ These are publicly known Hardhat test keys — **never use on mainnet.**
+
+---
+
+### Step 4 — Start the local blockchain
+
+Open a dedicated terminal and leave it running:
+
 ```bash
 cd contracts
 npx hardhat node
 ```
-> ✅ Leave this terminal running. You should see "Started HTTP and WebSocket JSON-RPC server at http://127.0.0.1:8545/"
 
-### Step 5: Deploy Contracts
+You should see:
+```
+Started HTTP and WebSocket JSON-RPC server at http://127.0.0.1:8545
+```
 
-Open a **new terminal** in `contracts/`:
+---
+
+### Step 5 — Deploy contracts
+
+In a new terminal:
+
 ```bash
 cd contracts
 npx hardhat run scripts/deploy.js --network localhost
 ```
 
-Copy the output addresses and paste them into **both** `.env` files:
+The output will print the deployed addresses, e.g.:
 ```
-VITE_USDC_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
-VITE_ESCROW_ADDRESS=0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
-ESCROW_MANAGER_ADDRESS=0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
-USDC_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
+MockUSDC deployed to:   0x5FbDB2315678afecb367f032d93F642f64180aa3
+EscrowManager deployed: 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
 ```
-> ⚠️ The addresses above are **deterministic** — they will always be the same if you redeploy on a fresh Hardhat node.
 
-> ✅ The deploy script auto-mints **10,000 USDC** to the Landlord (Account #0). No manual funding needed if you imported the Hardhat accounts in Step 3.
+Copy both addresses into **both** `.env` files:
 
-### Step 6: Start Backend & Frontend
+```env
+# backend/.env
+USDC_ADDRESS=<address from output>
+ESCROW_MANAGER_ADDRESS=<address from output>
+
+# frontend/.env
+VITE_USDC_ADDRESS=<address from output>
+VITE_ESCROW_ADDRESS=<address from output>
+```
+
+> ✅ The deploy script auto-mints **10,000 USDC** to the Landlord account. No manual funding needed.
+
+> ✅ Addresses are **deterministic** on a fresh Hardhat node — they will be the same every time you redeploy from scratch.
+
+**Add MockUSDC to MetaMask** (so balances show in the wallet):
+- MetaMask → Tokens → Import tokens
+- Token contract: `<USDC_ADDRESS from above>` · Symbol: `USDC` · Decimals: `6`
+
+---
+
+### Step 6 — Start backend and frontend
+
+Open two more terminals:
 
 ```bash
 # Terminal 3 — Backend
-cd backend && npm run dev
-
-# Terminal 4 — Frontend
-cd frontend && npm run dev
+cd backend
+npm run dev
 ```
 
-Open your browser at **`http://localhost:5173`** and connect MetaMask.
+```bash
+# Terminal 4 — Frontend
+cd frontend
+npm run dev
+```
+
+Open **`http://localhost:5173`** in your browser and connect MetaMask.
 
 > ⚠️ **If MetaMask shows old failed transactions** after restarting Hardhat:  
-> MetaMask → Settings → Advanced → **"Clear activity tab data"** → Refresh the page.
+> MetaMask → Settings → Advanced → **Clear activity tab data** → Refresh.
 
 ---
 
-## 🎬 Demo Flow
+## 🎬 Demo Scenarios
 
-### Scenario A: Mutual Release (Happy Path)
+### Scenario A — Mutual Release (happy path)
 
-| Step | Role | Action |
-|------|------|--------|
-| 1 | **Landlord** | Click "Create New" → Fill form → Upload lease doc → Deploy Escrow |
-| 2 | MetaMask | Confirm **2 popups**: (1) Approve USDC stake → (2) Create Lease |
-| 3 | **Tenant** | Switch MetaMask to Tenant account → Click "Approve & Deposit" |
-| 4 | **Landlord** | Switch back to Landlord → Click "Propose Release" |
-| 5 | **Tenant** | Click "Accept Release" → Funds distributed! |
+| Step | Who | Action |
+|------|-----|--------|
+| 1 | Landlord | Dashboard → **Create New** → fill form → upload move-in photos → Deploy Escrow |
+| 2 | MetaMask | Confirm **2 popups**: approve USDC stake, then create lease |
+| 3 | Tenant | Switch MetaMask to Tenant → click **Approve & Deposit** |
+| 4 | Landlord | Switch back → click **Propose Release** (set amount + upload damage photos) |
+| 5 | Tenant | Click **Accept & Release** → funds distributed |
 
-### Scenario B: AI Dispute Resolution ⭐
+### Scenario B — AI Dispute Resolution
 
-Follow steps 1–3 of Scenario A to get to `LOCKED` state, then:
+Follow Scenario A steps 1–3, then:
 
-1. **Tenant**: Click **"Raise Dispute"**
-2. Watch the **Backend terminal** — you'll see:
-   ```
-   ✓ DisputeRaised event detected for lease #1
-   ✓ Fetching IPFS evidence...
-   ✓ Sending to Gemini AI for analysis...
-   ✓ Verdict received. Submitting resolveDispute transaction...
-   ```
-3. The lease automatically moves to `RELEASED` with funds distributed per AI verdict.
+| Step | Who | Action |
+|------|-----|--------|
+| 4 | Tenant | Click **Raise Dispute** |
+| 5 | Backend | Automatically fetches IPFS evidence → sends to Gemini → submits verdict on-chain |
+| 6 | Both | Review AI proposal in the UI → both click **Accept Proposal** → funds released |
+
+### Scenario C — Human Escalation (HITL)
+
+Follow Scenario B steps 1–5, then either party clicks **Contest AI Verdict → Request Human Review**. An admin using the **⚖️ Admin Panel** tab can then submit a final on-chain resolution.
 
 ---
 
-## 💡 Creating an Escrow — What to Fill In
+## 💡 Creating an Escrow — Field Reference
 
-| Field | What to enter |
-|-------|--------------|
-| **Tenant address** | The Tenant MetaMask Ethereum (`0x...`) address |
-| **Deposit amount** | e.g. `1000` (USDC) |
-| **Deadline** | Any future date |
-| **Grace period** | e.g. `7` (days) |
-| **Evidence upload** | Any PDF or image (or skip — demo fallback is built in) |
+| Field | Example |
+|-------|---------|
+| Tenant address | Tenant MetaMask address (`0x709...`) |
+| Deposit amount | `1000` (USDC) |
+| Deadline | Any future date (dd/mm/yyyy) |
+| Grace period | `7` (days after deadline before timeout refund is claimable) |
+| Move-in photos | Any images — or skip to use a demo fallback CID |
 
-> The Landlord automatically stakes **20% of the deposit** (e.g. 200 USDC for a 1000 USDC deposit) as a performance guarantee.
+> The Landlord automatically stakes **20% of the deposit** (e.g. 200 USDC on a 1000 USDC deposit).
+
+---
+
+## 🏛️ Smart Contract Functions
+
+| Function | Caller | Description |
+|----------|--------|-------------|
+| `initializeLease()` | Landlord | Creates escrow, pulls 20% stake |
+| `depositFunds()` | Tenant | Locks deposit → state becomes LOCKED |
+| `proposeRelease()` | Landlord | Proposes payout split + uploads move-out evidence |
+| `acceptRelease()` | Tenant | Accepts split, distributes funds |
+| `raiseDispute()` | Tenant | Transitions to DISPUTED, triggers AI backend |
+| `submitAIVerdict()` | Backend (Verifier) | Posts AI verdict on-chain |
+| `acceptAIVerdict()` | Both parties | Each accepts; funds release when both agree |
+| `escalateToHuman()` | Either party | Requests human arbitrator |
+| `assignHumanVerifier()` | Owner | Assigns human verifier after escalation |
+| `resolveDispute()` | Verifier | Final on-chain resolution |
+| `timeoutRefund()` | Tenant | Full refund after deadline + grace period; slashes landlord stake |
 
 ---
 
@@ -201,41 +254,24 @@ Follow steps 1–3 of Scenario A to get to `LOCKED` state, then:
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| **Gas limit error** in MetaMask | MetaMask cached a broken gas estimate | Settings → Advanced → **Clear activity tab data** → Refresh |
-| **"Nonce too low"** | Hardhat was restarted without resetting MetaMask | Same fix as above |
-| **`ERC20InsufficientAllowance`** | The approve step didn't complete first | The app now handles this automatically — just try again after resetting |
-| **`EADDRINUSE :3001`** | Ghost node process stuck on port | Run `taskkill /F /IM node.exe` in PowerShell |
-| **Blank review page** | Page loaded before file upload confirmed | Click "Next: Review" — a demo CID is auto-assigned if no file uploaded |
-| **Tenant shows $0.00** | Tenant wallet not funded | Run the Fill Wallet script above for the Tenant address too |
-| **`Failed to fetch` (IPFS)** | Pinata JWT not configured | The app falls back to a demo CID automatically |
-| **`ERC20InsufficientBalance`** | Connected as Tenant when creating lease, or wallet has no USDC | Switch MetaMask to **Landlord** account (`0xf39Fd6...`) |
-| **`Failed to load escrows (500)`** | Contract address in `backend/.env` is stale after Hardhat restart | Redeploy contracts and update both `.env` files with new addresses |
-| **Wrong network banner in app** | MetaMask is on mainnet, not Hardhat | Switch network to **Hardhat (Chain ID 1337)** in MetaMask |
+| `cd: no such file or directory: ../backend` | Running install commands from wrong directory | Use `npm install --prefix <dir>` from the project root instead |
+| Gas limit error in MetaMask | Stale gas estimate cached | Settings → Advanced → **Clear activity tab data** → Refresh |
+| `Nonce too low` | Hardhat restarted without resetting MetaMask | Same fix as above |
+| `ERC20InsufficientAllowance` | Approve step didn't complete | Try again after clearing activity data |
+| `EADDRINUSE :3001` | Ghost Node process on port 3001 | `lsof -ti:3001 \| xargs kill` (macOS) or `taskkill /F /IM node.exe` (Windows) |
+| `Failed to fetch` (IPFS) | Pinata JWT not set | App falls back to demo CID automatically |
+| `ERC20InsufficientBalance` | Wrong MetaMask account active | Switch to the **Landlord** account when creating a lease |
+| `Failed to load escrows (500)` | Stale contract address after Hardhat restart | Redeploy contracts (Step 5) and update both `.env` files |
+| Wrong network banner | MetaMask on wrong network | Switch to **Hardhat (Chain ID 1337)** |
 
 ---
 
-## 🔐 Security Notes (Local Demo Only)
+## 🔐 Security Notes
 
 > [!WARNING]
-> The private keys and API keys shown in this README are for **local development only**.
-> The Hardhat deployer key (`0xac097...`) is publicly known and must **never** be used on mainnet.
+> All private keys and addresses in this README are **Hardhat test accounts only**.
+> They are publicly known and must **never** be used on any real network.
 
 ---
 
-## 🏛️ Smart Contract Functions
-
-| Function | Role | Triggered By |
-|----------|------|-------------|
-| `initializeLease()` | Creates escrow, pulls 20% stake from Landlord | Landlord |
-| `depositFunds()` | Tenant locks deposit, moves to LOCKED state | Tenant |
-| `proposeRelease()` | Landlord proposes a payout split | Landlord |
-| `acceptRelease()` | Tenant accepts split, funds distributed | Tenant |
-| `raiseDispute()` | Moves to DISPUTED, triggers AI backend | Tenant |
-| `resolveDispute()` | AI verdict submitted on-chain | Backend (Verifier) |
-| `timeoutRefund()` | Refunds tenant if deadline + grace period passes | Tenant |
-
----
-
-**Built with ❤️ for trustless rentals**
-
-
+**Built for IS4302 — trustless rentals on-chain**
